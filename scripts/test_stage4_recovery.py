@@ -148,10 +148,12 @@ def checkpoint(
     return event_id, outcome
 
 
-def recover(project_id: str, new_session_id: str, work_limit: int = 100) -> dict:
+def recover(
+    project_id: str, new_session_id: str, work_limit: int = 100, related_limit: int = 200,
+) -> dict:
     raw = scalar(
         "SELECT aep.recover_session_state("
-        f"{lit(project_id)}::uuid,{lit(new_session_id)}::uuid,{work_limit},200)::text;"
+        f"{lit(project_id)}::uuid,{lit(new_session_id)}::uuid,{work_limit},{related_limit})::text;"
     )
     return json.loads(raw)
 
@@ -303,6 +305,21 @@ def test_recovery_without_prior_session_context(
     if "chat_messages" in definition or "conversation_history" in definition or "transcript" in definition:
         raise AssertionError("T11 recovery function contains a chat transcript dependency")
 
+    bounded_snapshot = recover(project_id, str(uuid4()), work_limit=1, related_limit=1)
+    bounded_collections = (
+        "dependencies", "executions", "work_events", "evidence", "deliveries",
+        "delivery_evidence", "operation_receipts", "operation_receipt_events",
+        "project_resources", "owner_decisions", "adapter_capabilities",
+    )
+    for collection in bounded_collections:
+        if len(bounded_snapshot[collection]) > 1:
+            raise AssertionError(
+                f"related_limit did not bound {collection}: {len(bounded_snapshot[collection])}"
+            )
+    if bounded_snapshot["related_data_truncated"]["work_events"] is not True:
+        raise AssertionError("recovery did not disclose that the work-event history was truncated")
+    if bounded_snapshot["work_list_truncated"] is not False:
+        raise AssertionError("recovery incorrectly reported the one-item Work list as truncated")
     print("PASS T10: fresh session reconstructs Work, dependencies, Execution/fence/lease, delivery, evidence, checkpoints and receipts")
     print("PASS T11: recovery uses only durable PostgreSQL state and requires no prior chat transcript")
     return work_id, execution_a, fence_a, session_a, session_b
