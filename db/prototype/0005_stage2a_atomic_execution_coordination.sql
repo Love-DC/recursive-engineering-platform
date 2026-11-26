@@ -455,20 +455,20 @@ BEGIN
   -- No protocol state is modified until the complete requirement/grant set
   -- and all physical conflicts have passed validation.
   IF v_has_previous THEN
-    UPDATE aep.executions
+    UPDATE aep.executions AS execution_row
     SET status = 'expired',
         finished_at = v_now,
         updated_at = v_now
-    WHERE execution_id = v_previous_execution_id
-      AND work_id = p_work_id
-      AND status IN ('claimed', 'running');
+    WHERE execution_row.execution_id = v_previous_execution_id
+      AND execution_row.work_id = p_work_id
+      AND execution_row.status IN ('claimed', 'running');
 
-    UPDATE aep.resource_claims
+    UPDATE aep.resource_claims AS claim_row
     SET status = 'expired',
         lease_until = NULL,
         released_at = v_now
-    WHERE execution_id = v_previous_execution_id
-      AND status IN ('reserved', 'active');
+    WHERE claim_row.execution_id = v_previous_execution_id
+      AND claim_row.status IN ('reserved', 'active');
   END IF;
 
   SELECT COALESCE(max(execution_row.attempt_no), 0) + 1
