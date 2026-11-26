@@ -57,9 +57,9 @@ ALTER TABLE aep.operation_receipts
   ADD COLUMN stale_execution_detected boolean NOT NULL DEFAULT false,
   ADD CONSTRAINT operation_receipts_execution_fence_ck
     CHECK (
-      execution_id IS NULL
+      (execution_fence IS NULL AND target_host IS NULL AND target_repository_id IS NULL)
       OR (
-        execution_fence IS NOT NULL AND execution_fence > 0
+        execution_fence > 0
         AND target_resource_id IS NOT NULL
         AND target_host IS NOT NULL
         AND target_repository_id IS NOT NULL
@@ -546,6 +546,12 @@ BEGIN
     'payload', p_payload
   );
   v_hash := encode(public.digest(convert_to(v_intent::text, 'UTF8'), 'sha256'), 'hex');
+
+  -- Serialize the idempotency key even when no receipt row exists yet.
+  -- Hash collisions only serialize unrelated keys; they cannot merge identities.
+  PERFORM pg_advisory_xact_lock(
+    hashtextextended('github-operation:' || p_operation_key, 0)
+  );
 
   SELECT * INTO v_existing
   FROM aep.operation_receipts
