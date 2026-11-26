@@ -107,6 +107,26 @@ def add_requirement(project_id: str, work_id: str, resource_id: str, ref: str) -
     )
 
 
+def project_dependency_graph(project_id: str, *, graph_scope: str = "project",
+                             graph_status: str = "active") -> str:
+    graph_id = scalar(
+        "INSERT INTO aep.dependency_graphs(graph_scope,owner_project_id,status) VALUES("
+        f"{lit(graph_scope)},{lit(project_id)}::uuid,{lit(graph_status)}) RETURNING graph_id;"
+    )
+    psql(
+        "INSERT INTO aep.dependency_graph_members(graph_id,project_id,access_mode) VALUES("
+        f"{lit(graph_id)}::uuid,{lit(project_id)}::uuid,'owner');"
+    )
+    return graph_id
+
+
+def add_dependency(source_work: str, prerequisite_work: str, graph_id: str) -> None:
+    psql(
+        "INSERT INTO aep.work_relations(source_work_id,target_work_id,relation_type,dependency_graph_id) VALUES("
+        f"{lit(source_work)}::uuid,{lit(prerequisite_work)}::uuid,'depends_on',{lit(graph_id)}::uuid);"
+    )
+
+
 def claim_sql(work_id: str, session_id: str, seconds: int) -> str:
     return (
         "SELECT execution_id::text || '|' || attempt_no::text || '|' || fence::text "
@@ -401,6 +421,69 @@ def main() -> None:
         raise AssertionError(f"T04 Work/current execution/fence projection is incoherent: {t04_state}")
     print("PASS T04: two independent PostgreSQL connections produced exactly one current execution")
 
+    # Claim re-checks dependencies instead of trusting the cached READY status.
+    dependency_graph = project_dependency_graph(project_a)
+    dependency_prerequisite = ready_work(project_a, "dependency-prerequisite")
+    dependency_dependent = ready_work(project_a, "dependency-dependent")
+    add_dependency(dependency_dependent, dependency_prerequisite, dependency_graph)
+    expect_error(
+        claim_sql(dependency_dependent, str(uuid4()), 60),
+        "incomplete prerequisite",
+        "claim with incomplete dependency prerequisite",
+    )
+    dependency_blocked_state = scalar(
+        "SELECT status || '|' || COALESCE(current_execution_id::text,'null') "
+        "|| '|' || fence_generation::text || '|' "
+        "(SELECT count(*)::text FROM aep.executions WHERE work_id=works.work_id) "
+        f"FROM aep.works WHERE work_id={lit(dependency_dependent)}::uuid;"
+    )
+    if dependency_blocked_state != "ready|null|0|0":
+        raise AssertionError(f"incomplete prerequisite left partial claim state: {dependency_blocked_state}")
+
+    prerequisite_claim = parse_claim(psql(claim_sql(dependency_prerequisite, str(uuid4()), 60)))
+    prerequisite_finished = scalar(
+        "SELECT work_status FROM aep.finish_execution("
+        f"{lit(dependency_prerequisite)}::uuid,{lit(prerequisite_claim[0])}::uuid,"
+        f"{prerequisite_claim[2]},{prerequisite_claim[4]},'succeeded','{{}}'::jsonb);"
+    )
+    if prerequisite_finished != "delivered":
+        raise AssertionError(f"prerequisite did not reach the accepted successful terminal state: {prerequisite_finished}")
+    dependent_claim = parse_claim(psql(claim_sql(dependency_dependent, str(uuid4()), 60)))
+    dependent_finished = scalar(
+        "SELECT work_status FROM aep.finish_execution("
+        f"{lit(dependency_dependent)}::uuid,{lit(dependent_claim[0])}::uuid,"
+        f"{dependent_claim[2]},{dependent_claim[4]},'succeeded','{{}}'::jsonb);"
+    )
+    if dependent_finished != "delivered":
+        raise AssertionError(f"Work with a completed prerequisite could not be claimed: {dependent_finished}")
+
+    shared_graph = project_dependency_graph(project_a, graph_scope="shared")
+    shared_dependent = ready_work(project_a, "shared-graph-dependency-rejected")
+    add_dependency(shared_dependent, dependency_prerequisite, shared_graph)
+    expect_error(
+        claim_sql(shared_dependent, str(uuid4()), 60),
+        "inactive/unauthorized dependency graph",
+        "claim through unsupported shared dependency graph",
+    )
+    archived_graph = project_dependency_graph(project_a, graph_status="archived")
+    archived_dependent = ready_work(project_a, "archived-graph-dependency-rejected")
+    add_dependency(archived_dependent, dependency_prerequisite, archived_graph)
+    expect_error(
+        claim_sql(archived_dependent, str(uuid4()), 60),
+        "inactive/unauthorized dependency graph",
+        "claim through archived dependency graph",
+    )
+    for blocked_work in (shared_dependent, archived_dependent):
+        blocked_state = scalar(
+            "SELECT status || '|' || COALESCE(current_execution_id::text,'null') "
+            "|| '|' || fence_generation::text || '|' "
+            "(SELECT count(*)::text FROM aep.executions WHERE work_id=works.work_id) "
+            f"FROM aep.works WHERE work_id={lit(blocked_work)}::uuid;"
+        )
+        if blocked_state != "ready|null|0|0":
+            raise AssertionError(f"unauthorized/inactive dependency graph left partial claim state: {blocked_state}")
+    print("PASS dependency eligibility: incomplete prerequisites and inactive/shared graphs fail closed; completed prerequisites permit claim")
+
     # A renewal and takeover both queue behind a Work-row lock. Before the lease
     # expiry, the renewal may extend it but the takeover must never steal it.
     boundary_work = ready_work(project_a, "lease-boundary-race")
@@ -680,6 +763,56 @@ def main() -> None:
     ) != "0":
         raise AssertionError("revoked grant failure left an Execution row")
     print("PASS authorization: active ProjectResource and approved scoped grant required; unsupported write sets fail closed")
+
+    # A physical Resource ID cannot be retargeted after its identity is created,
+    # including after a write grant/requirement exists or while an execution is active.
+    identity_resource = "00000000-0000-0000-0000-000000000106"
+    add_resource(identity_resource, "stage2a-immutable-106")
+    approved_project_grant(project_a, identity_resource, "immutable-106")
+    identity_work = ready_work(project_a, "immutable-resource-identity")
+    add_requirement(project_a, identity_work, identity_resource, "refs/heads/identity-immutable")
+    expect_error(
+        "UPDATE aep.resources SET provider='gitlab',host='gitlab.com',resource_type='project',"
+        "stable_resource_id='retargeted',canonical_key='repository:retargeted' "
+        f"WHERE resource_id={lit(identity_resource)}::uuid;",
+        "identity fields are immutable",
+        "resource identity mutation after grant/requirement",
+    )
+    identity_claim = parse_claim(psql(claim_sql(identity_work, str(uuid4()), 60)))
+    expect_error(
+        "UPDATE aep.resources SET canonical_key='repository:retargeted-while-active' "
+        f"WHERE resource_id={lit(identity_resource)}::uuid;",
+        "identity fields are immutable",
+        "resource identity mutation during active claim",
+    )
+
+    # Simulate corrupted legacy/manual state with the archive trigger disabled:
+    # claim_work must independently reject an unsupported physical resource type.
+    corrupt_resource = "00000000-0000-0000-0000-000000000107"
+    add_resource(corrupt_resource, "stage2a-corrupt-107")
+    approved_project_grant(project_a, corrupt_resource, "corrupt-107")
+    corrupt_work = ready_work(project_a, "corrupted-resource-identity-fails-closed")
+    add_requirement(project_a, corrupt_work, corrupt_resource, "refs/heads/corrupt-resource")
+    psql(
+        "ALTER TABLE aep.resources DISABLE TRIGGER resources_active_claim_guard; "
+        "UPDATE aep.resources SET provider='gitlab',host='gitlab.com',resource_type='repository' "
+        f"WHERE resource_id={lit(corrupt_resource)}::uuid; "
+        "ALTER TABLE aep.resources ENABLE TRIGGER resources_active_claim_guard;"
+    )
+    expect_error(
+        claim_sql(corrupt_work, str(uuid4()), 60),
+        "not an active GitHub repository",
+        "claim with corrupted unsupported physical Resource",
+    )
+    corrupt_state = scalar(
+        "SELECT status || '|' || COALESCE(current_execution_id::text,'null') "
+        "|| '|' || fence_generation::text || '|' "
+        "(SELECT count(*)::text FROM aep.executions WHERE work_id=works.work_id) "
+        f"FROM aep.works WHERE work_id={lit(corrupt_work)}::uuid;"
+    )
+    if corrupt_state != "ready|null|0|0":
+        raise AssertionError(f"unsupported resource rejection left partial claim state: {corrupt_state}")
+    print("PASS resource identity: retargeting rejected after grant and during claim; claim revalidates GitHub repository type")
 
     # Security-definer entry points are narrowly exposed; every definer routine
     # has the non-bypass owner and a fixed search_path, with RLS forced on tables.
