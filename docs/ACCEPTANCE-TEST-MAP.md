@@ -4,7 +4,7 @@ Authoritative behavioral definitions are in [Snapshot v2.0](https://github.com/L
 
 | ID | Required proof | Planned stage | Status |
 |---|---|---:|---|
-| T01 | Concurrent canonical registration yields one Work | 1A–2 | PASS — two independent PostgreSQL connections, different request keys, one shared work_id |
+| T01 | Concurrent canonical registration yields one Work | 1A–2 | PARTIAL — two independent PostgreSQL connections with different request keys for the same canonical identity were launched and converged on one Work. The existing sleep-based overlap window does not deterministically prove that both sessions entered the competing critical section concurrently. Deterministic rendezvous proof remains pending integration into the final PR #9 candidate and successful CI on that exact SHA. Rendezvous code in PR #15 is not integrated into this candidate and is not counted as runtime-verified evidence |
 | T02 | Idempotency replay and payload conflict | 1A–2 | PASS — replay returns same work_id; changed payload with same key conflicts |
 | T03 | Lost registration response recovers without duplicate Work/ExternalRef | 1A–3 | PARTIAL — Work registration retry from a new session passed; external operation receipt reconciliation is not implemented |
 | T04 | Concurrent claim race yields one current execution | 2 | PARTIAL — one-active Execution unique index tested; atomic claim protocol and concurrent claim RPC not implemented |
