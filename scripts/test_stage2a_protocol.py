@@ -786,6 +786,63 @@ def main() -> None:
         "resource identity mutation during active claim",
     )
 
+    # Resource IDs are permanent tombstoned identities. Removing the last
+    # ProjectResource link must not permit deleting the Resource row and then
+    # reusing its UUID with a different physical repository while the old
+    # resource-scoped OwnerDecision remains approved.
+    reuse_resource = "00000000-0000-0000-0000-000000000108"
+    add_resource(reuse_resource, "stage2a-delete-reuse-original-108")
+    reuse_decision = scalar(
+        "INSERT INTO aep.owner_decisions("
+        "scope_type,scope_key,decision_key,statement,decision_version,status,"
+        "approval_source_kind,approval_source_ref,approver_principal,"
+        "approval_provenance,approved_at"
+        ") VALUES("
+        f"'resource',{lit(reuse_resource)},{lit('stage2a-resource-delete-reuse')},"
+        f"{lit('Approved access to the original physical resource')},1,'approved',"
+        "'direct_owner_message','test://owner/stage2a-resource-delete-reuse','test-owner',"
+        "jsonb_build_object('direct_owner_confirmation',true),clock_timestamp()"
+        ") RETURNING decision_id;"
+    )
+    psql(
+        "INSERT INTO aep.project_resources(project_id,resource_id,access_mode,status,"
+        "grant_version,grant_decision_id) VALUES("
+        f"{lit(project_a)}::uuid,{lit(reuse_resource)}::uuid,'write','active',1,"
+        f"{lit(reuse_decision)}::uuid);"
+    )
+    # No ResourceClaim exists, so unlinking the project is allowed. The Resource
+    # identity itself must remain as a permanent tombstone.
+    psql(
+        "DELETE FROM aep.project_resources "
+        f"WHERE project_id={lit(project_a)}::uuid AND resource_id={lit(reuse_resource)}::uuid;"
+    )
+    expect_error(
+        "DELETE FROM aep.resources "
+        f"WHERE resource_id={lit(reuse_resource)}::uuid;",
+        "identity is permanent",
+        "delete unclaimed Resource after removing ProjectResource",
+    )
+    if scalar(
+        "SELECT status || '|' || canonical_key FROM aep.resources "
+        f"WHERE resource_id={lit(reuse_resource)}::uuid;"
+    ) != "active|repository:stage2a-delete-reuse-original-108":
+        raise AssertionError("rejected Resource deletion did not preserve the original physical identity")
+    if scalar(
+        "SELECT status || '|' || scope_key FROM aep.owner_decisions "
+        f"WHERE decision_id={lit(reuse_decision)}::uuid;"
+    ) != f"approved|{reuse_resource}":
+        raise AssertionError("resource-scoped OwnerDecision provenance was not retained for the permanent Resource ID")
+    expect_error(
+        "INSERT INTO aep.resources(resource_id,provider,host,resource_type,stable_resource_id,"
+        "canonical_key,display_name) VALUES("
+        f"{lit(reuse_resource)}::uuid,'github','github.com','repository',"
+        "'different-physical-repository','repository:different-physical-repository',"
+        "'Different physical repository');",
+        "duplicate key value violates unique constraint",
+        "reuse a permanently reserved Resource UUID for a different physical repository",
+    )
+    print("PASS resource identity lifecycle: unclaimed Resource cannot be deleted or have its UUID reused after ProjectResource unlink")
+
     # Simulate corrupted legacy/manual state with the archive trigger disabled:
     # claim_work must independently reject an unsupported physical resource type.
     corrupt_resource = "00000000-0000-0000-0000-000000000107"
