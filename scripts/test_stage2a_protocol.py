@@ -307,10 +307,15 @@ def test_live_lease_boundary_race(work_id: str, current: tuple[str, int, int, st
 
         renew_out, renew_err = renew.communicate(timeout=10)
         takeover_out, takeover_err = takeover.communicate(timeout=10)
-        if renew.returncode == 0 or not (
-            "expired lease" in renew_err or "stale, superseded" in renew_err
+        if renew.returncode == 0 or not any(
+            reason in renew_err
+            for reason in (
+                "expired lease",
+                "stale, superseded",
+                "Work version changed",
+            )
         ):
-            raise AssertionError(f"expired renewal was not rejected: {renew_out}/{renew_err}")
+            raise AssertionError(f"expired/stale renewal was not rejected: {renew_out}/{renew_err}")
         if takeover.returncode != 0:
             raise AssertionError(f"expired lease takeover failed: {takeover_out}/{takeover_err}")
         new_claim = parse_claim(subprocess.CompletedProcess(
