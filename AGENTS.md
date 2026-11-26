@@ -65,7 +65,8 @@ All migrations under `db/prototype` (0001–0008 at this baseline) run only agai
 ## Current prototype limits and Stage 4 scope
 
 - The Stage 0/1 prototype must not mutate any existing Supabase project or database; the legacy RAE database remains untouched.
-- Stage 4 has not yet been implemented: fresh-session recovery (T10/T11), authorized Context Compiler and source-pinned Context Packs, evidence-derived/rebuildable memory (T25), and A0 bounded discovery/decomposition (T19/T20) remain outstanding.
+- **Stage 4A — fresh-session recovery (T10/T11):** implemented as a disposable PostgreSQL 17.12 prototype in [PR #65](https://github.com/Love-DC/recursive-engineering-platform/pull/65); code-only candidate [Run #112](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45909096915) passed the clean 0001–0009 migration chain, Stage 2A/2B/3 regressions, and T10/T11. Final PR HEAD review/merge/post-merge gates are tracked in [Issue #59](https://github.com/Love-DC/recursive-engineering-platform/issues/59). The ProjectResource gate is not production authenticated session-to-project binding.
+- **Stage 4B–4D remain outstanding:** authorized Context Compiler and source-pinned Context Packs, evidence-derived/rebuildable memory (T25), and A0 bounded discovery/decomposition (T19/T20).
 - T06 remains PARTIAL: exclusion is conservative at whole-repository/branch-ref granularity; path-overlap/narrower write-set exclusion is not implemented.
 - T16 remains PARTIAL for actual Owner event verification/supersede enforcement. T17/T18 remain PARTIAL for authenticated production project authorization, cross-project retrieval isolation, and a complete production role/security audit. T24 remains PARTIAL for versioned transition/replay protocol.
 - The connected GitHub session surface does not provide an independently authenticated native-approval principal. Process Review COMMENTED is not GitHub Native Approval APPROVED. Deployment is unsupported.
