@@ -153,7 +153,9 @@ def expect_missing_capability_status(
 
 
 def setup_database() -> list[Path]:
-    paths = sorted(MIGRATIONS.glob("*.sql"))
+    # Stage 3 is pinned to the migrations it introduced; later additive stages
+    # have their own protocol suites and clean-chain checks.
+    paths = sorted(path for path in MIGRATIONS.glob("*.sql") if path.name[:4] <= "0008")
     versions: list[int] = []
     for path in paths:
         match = re.fullmatch(r"(\d{4})_[a-z0-9_]+\.sql", path.name)
