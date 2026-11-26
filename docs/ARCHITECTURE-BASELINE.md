@@ -4,6 +4,10 @@
 
 **Primary source:** [Architecture RFC #1 — Current Design Snapshot v2.0](https://github.com/Love-DC/recursive-engineering-platform/issues/1#issuecomment-7161657103)
 
+**Authority reconciliation (2026-11-26):** The Owner directly accepted v2.0 as the overall architecture baseline in the ChatGPT conversation on 2026-11-26. The coordinator recorded that confirmation in [Issue #1](https://github.com/Love-DC/recursive-engineering-platform/issues/1#issuecomment-7180060029). This is a later coordinator-authored provenance record, not a claim that the historical Snapshot comment was originally written by the Owner. That record accepts the overall architecture direction only; D4 remains PROVISIONAL and D9/D13/D15/D16 remain UNVERIFIED / OPEN.
+
+**Implementation-stage mapping:** Implementation Stages 1A and 1B are preparatory slices of Architecture Snapshot Stage 1. They do not complete architecture Stage 1. Atomic claim/resource reservation, lease/fencing, stale-write rejection, and project authorization remain implementation Stage 2 work. This crosswalk maps the delivery roadmap to the architecture; it does not redefine or renumber the architecture's stages.
+
 **Implementation state:** Not implemented by virtue of this document. Runtime schema, transaction protocols, concurrency behavior, security isolation, and adapters require code and executable verification.
 
 ## 1. Product objective

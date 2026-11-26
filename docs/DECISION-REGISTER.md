@@ -4,6 +4,8 @@ This register separates approval of the architecture baseline from approval of s
 
 Primary source: [Current Design Snapshot v2.0](https://github.com/Love-DC/recursive-engineering-platform/issues/1#issuecomment-7161657103).
 
+**Approval provenance:** The Owner directly accepted v2.0 as the overall architecture baseline in the ChatGPT conversation on 2026-11-26. The coordinator's durable reconciliation record is [Issue #1 comment #7180060029](https://github.com/Love-DC/recursive-engineering-platform/issues/1#issuecomment-7180060029). It explicitly distinguishes the Owner's direct decision from the authorship of the earlier Snapshot comment. This acceptance does not resolve any open/provisional decision below.
+
 ## Status vocabulary
 
 - **OWNER-APPROVED** — direct Owner decision for the stated scope/version.

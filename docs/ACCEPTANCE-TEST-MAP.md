@@ -8,8 +8,8 @@ Authoritative behavioral definitions are in [Snapshot v2.0](https://github.com/L
 | T02 | Idempotency replay and payload conflict | 1A–2 | PASS — replay returns same work_id; changed payload with same key conflicts |
 | T03 | Lost registration response recovers without duplicate Work/ExternalRef | 1A–3 | PARTIAL — Work registration retry from a new session passed; external operation receipt reconciliation is not implemented |
 | T04 | Concurrent claim race yields one current execution | 2 | PARTIAL — one-active Execution unique index tested; atomic claim protocol and concurrent claim RPC not implemented |
-| T05 | Lease takeover advances fence and rejects stale writes | 2 | PARTIAL — Execution attempt/fence fields and per-Work uniqueness tested; lease expiry/takeover/stale-write enforcement not implemented |
-| T06 | Same physical resource/ref/write set is mutually excluded across projects | 2 | PARTIAL — exact ResourceClaim conflict key and project/resource/work foreign keys tested; atomic claim protocol and path-overlap semantics not implemented |
+| T05 | Lease takeover advances fence and rejects stale writes | 2 | PARTIAL — attempt_no and fence per-Work unique constraints are declared in the schema but have not been independently behavior-tested; the separate one-active-Execution constraint is exercised under T04. Lease expiry/takeover and stale-write enforcement are not implemented |
+| T06 | Same physical resource/ref/write set is mutually excluded across projects | 2 | PARTIAL — exact active ResourceClaim resource/ref/conflict_key conflict behavior is exercised. Composite ResourceClaim foreign-key declarations are present in the schema, but each composite FK has not been independently exercised by a targeted negative test. Atomic claim and path-overlap semantics are not implemented |
 | T07 | Concurrent two-node dependency insertion cannot create a cycle | 2 | PARTIAL — typed depends_on relation and graph reference constraints tested; graph locking/atomic cycle prevention not implemented |
 | T08 | Cross-project graph writes require authorized shared graph | 2 | PARTIAL — shared graph membership and non-null write grant reference are modeled; approved-grant checks and graph mutation authorization not implemented |
 | T09 | READY invalidation after dependency/authority change | 2 | NOT IMPLEMENTED |
@@ -31,10 +31,13 @@ Authoritative behavioral definitions are in [Snapshot v2.0](https://github.com/L
 | T25 | Derived memory/index rebuilds from source evidence | 4 | NOT IMPLEMENTED |
 | T26 | Clean database migration chain has unique ordered versions | 1A–1B | PASS — both migrations applied to clean PostgreSQL 17.12 in CI |
 
-## Exact evidence
+## Evidence history and current-candidate slot
 
-- Integrated PR: [#9](https://github.com/Love-DC/recursive-engineering-platform/pull/9)
-- Candidate SHA: `d055fc1d6fbc7f83d83e35a43fefd6d89a90db43`
-- GitHub Actions: [run #45734761932 — success](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45734761932)
+- Integrated PR: [#9](https://github.com/Love-DC/recursive-engineering-platform/pull/9) — currently open and unmerged; findings remediation is in progress.
+- Historical Run #24 ([45734761932](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45734761932)): success for old SHA `d055fc1d6fbc7f83d83e35a43fefd6d89a90db43`.
+- Historical Run #27 ([45735069544](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45735069544)): success for reviewed SHA `5648ce0de9e3d9bd6460645819d75bffb35dd772`.
+- These are historical run records, not evidence for the final post-remediation candidate.
+- **Final integrated candidate SHA:** PENDING until every PR #9 remediation is merged.
+- **Final matching GitHub Actions run:** PENDING until CI completes against that exact final SHA.
 
-Schema-only partial results are not end-to-end protocol passes. The complete Stage 2–4 behavior remains outstanding.
+Schema-only partial results are not end-to-end protocol passes. Successful CI is not acceptance. The complete architecture Stage 1 guarantees mapped to implementation Stage 2, and the later Stage 3–4 behavior, remain outstanding.

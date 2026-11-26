@@ -13,8 +13,26 @@ Stage 1B data model: [Issue #8](https://github.com/Love-DC/recursive-engineering
 
 **Stage 1B — minimum coordination data model implemented and schema-tested in PR #9.** Physical Resource / ProjectResource, Execution, ResourceClaim, dependency graph descriptors/membership, typed WorkRelations, OwnerDecision provenance, Evidence, and OperationReceipt/event records are present as additive migration 0002. Tests validate declared foreign keys, unique indexes, RLS table ownership, and selected integrity constraints. This does not implement the Stage 2 transaction protocols.
 
-Candidate SHA: `d055fc1d6fbc7f83d83e35a43fefd6d89a90db43`  
-Exact-SHA CI: [run #45734761932 — success](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45734761932)
+### Historical CI evidence — not final candidate evidence
+
+- Run #24 ([45734761932](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45734761932)) passed for historical SHA `d055fc1d6fbc7f83d83e35a43fefd6d89a90db43`.
+- Run #27 ([45735069544](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45735069544)) passed for the review SHA `5648ce0de9e3d9bd6460645819d75bffb35dd772`.
+- Both runs are retained as historical evidence only. Neither identifies the final post-remediation candidate.
+- **Final integrated candidate SHA:** PENDING — record only after all PR #9 remediation PRs are merged.
+- **Final exact-SHA CI run:** PENDING — record only after CI completes against that final integrated candidate.
+
+PR #9 remains open and unmerged. Review findings are being remediated; successful historical CI is not acceptance.
+
+## Architecture-to-implementation stage crosswalk
+
+The stage numbers describe two different planning views and must not be read as a one-to-one renumbering:
+
+| Architecture Snapshot v2.0 | Implementation roadmap | Mapping |
+|---|---|---|
+| Stage 1 — Work registration and coordination, including the required atomic coordination and authorization guarantees | Stages 1A and 1B | Preparatory implementation slices: canonical Work registration and the minimum coordination data model. These slices do not complete architecture Stage 1. |
+| Remaining architecture Stage 1 guarantees | Implementation Stage 2 | Still to implement and verify: atomic claim and resource reservation, lease/takeover and monotonic fencing, stale-write rejection, and project authorization. |
+
+Implementation Stage 2 also contains the dependency mutation and DAG safety protocols specified by the accepted baseline. Architecture stage definitions remain unchanged.
 
 ## Stages and gates
 
