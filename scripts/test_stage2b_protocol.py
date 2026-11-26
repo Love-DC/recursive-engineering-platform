@@ -467,7 +467,7 @@ def race_lock_then_waiter(graph_id: str, holder_lock: str, holder_action: str,
 
 
 def main() -> None:
-    migration_paths = sorted(MIGRATIONS.glob("*.sql"))
+    migration_paths = sorted(path for path in MIGRATIONS.glob("*.sql") if path.name[:4] <= "0006")
     versions = []
     for path in migration_paths:
         match = re.fullmatch(r"(\d{4})_[a-z0-9_]+\.sql", path.name)

@@ -386,7 +386,7 @@ def test_live_lease_boundary_race(work_id: str, current: tuple[str, int, int, st
 
 
 def main() -> None:
-    migration_paths = sorted(MIGRATIONS.glob("*.sql"))
+    migration_paths = sorted(path for path in MIGRATIONS.glob("*.sql") if path.name[:4] <= "0006")
     versions = []
     for path in migration_paths:
         match = re.fullmatch(r"(\d{4})_[a-z0-9_]+\.sql", path.name)
