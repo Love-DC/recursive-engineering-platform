@@ -1,6 +1,6 @@
-# Work Registry, coordination model, and Stage 2A protocol prototype
+# Work Registry, coordination model, and Stage 2A–Stage 3 protocol prototypes
 
-This directory contains a PostgreSQL experiment for the Stage 1A/1B data model and the Stage 2A transactional execution protocol.
+This directory contains a PostgreSQL experiment for the Stage 1A/1B data model and the Stage 2A, Stage 2B, and Stage 3 transactional protocol prototypes.
 
 ## Implemented
 
@@ -20,6 +20,8 @@ This directory contains a PostgreSQL experiment for the Stage 1A/1B data model a
 
 The initial Stage 2A candidate at HEAD `285dbc092744cb5d0f88ab391e25a84257298919` passed [Run #54](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45781729538), then returned **CHANGES_REQUIRED** for protocol and documentation findings. Initial P1 protocol findings and the second-round Resource UUID DELETE/reuse P2 were corrected. The third independent review found no further reproducible Stage 2A protocol defect; Run #67 passed on protocol-code HEAD `8d5225f9b691ca6eb866b951d67217cd627538ee` / tree `a6ec86ef30d15f3bfabe0f91a27a2009c7945d75`. The fourth review's P2 omission of Run #69 was corrected; the final focused review on candidate HEAD `b1a3590e8792355d8330cf52e7e30decc700e9d3` / tree `b88e60222483e9396508c6b621d669198cf61074` returned PASS. PR #38 merged to `main` at `4d3b52195e0fdcd0a20f96dedb18eb97f88a1131`. Pre-merge [Run #71](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45794893367) and post-merge exact-commit [Run #72](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45798073719) both passed Repository contract checks and PostgreSQL 17.12 integration/Stage 2A protocol tests. T04 PASS, T05 PASS, T06 PARTIAL (whole-repository/branch-ref exclusion only; no path-overlap locking). The Stage 2A prototype is merged and post-merge verified; production Supabase, production writes, pilot and legacy RAE cutover remain out of scope.
 
+
+**Stage 2B post-merge verification:** PR #43 merged to `main` at `f222267e015bd3ab6058eb34464b370a5e405171`. The focused independent migration-upgrade confirmation returned PASS; exact source-head Run #85 and post-merge Run #86 passed. T07/T08/T09/T23 are PASS for the tested disposable PostgreSQL 17.12 prototype scope.
 
 **Post-merge verification:** PR #38 merge commit `4d3b52195e0fdcd0a20f96dedb18eb97f88a1131` is the current integrated Stage 2A delivery. [Run #72](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45798073719) passed on that exact commit: Repository contract checks and PostgreSQL 17 Work Registry integration tests both succeeded; the latter completed clean migration/concurrency and Stage 2A atomic coordination tests on PostgreSQL 17.12.
 
@@ -41,11 +43,11 @@ The Stage 3 PostgreSQL 17.12 test runner is `scripts/test_stage3_delivery_protoc
 
 ## What these tests do not prove
 
-- Stage 2B atomic dependency-edge mutation, DAG cycle prevention, graph-wide concurrency, shared/cross-project dependency authorization, or READY invalidation after dependency/authority changes.
+- Production-grade authenticated project authorization and cross-project retrieval isolation; Stage 2B graph authorization checks are prototype behavior, not a production authorization boundary.
 - Path-overlap or normalized write-set conflict semantics; current resource exclusion is conservative exact whole-repository/branch-ref exclusion.
 - Populated-database migration upgrade/preflight safety.
 - A production Supabase deployment, production write API, authenticated caller-to-project binding, or hostile multi-tenant authorization.
-- Live GitHub provider execution by a runtime service, production-grade authenticated caller/project binding, actual branch-protection approval by an independent principal, deployment, or legacy RAE cutover. Stage 3 CI validates protocol behavior using a controllable provider fake; it does not deploy or write to GitHub.
+- A production GitHub provider/runtime, production-grade authenticated caller/project binding, actual branch-protection approval by an independent principal, deployment, or legacy RAE cutover. Stage 3 CI validates protocol behavior using a controllable provider fake; it does not deploy or write to GitHub.
 - An always-on LLM runtime or proof that an expired ChatGPT session has stopped acting.
 
 ## Security and deployment limitations
