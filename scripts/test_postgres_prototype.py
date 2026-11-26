@@ -269,6 +269,21 @@ def main() -> None:
     work_one = scalar(register(project_id,"model-work-one","model-work-one",title="Model work one")).split("|")[0]
     work_two = scalar(register(project2,"model-work-two","model-work-two",title="Model work two")).split("|")[0]
     work_child = scalar(register(project_id,"model-work-child","model-work-child",title="Model child")).split("|")[0]
+    # Composite project/work references prevent cross-project request and event rows.
+    wrong_request_scope = psql(
+        "INSERT INTO aep.work_requests(project_id,operation,idempotency_key,request_payload,work_id) VALUES "
+        f"({lit(project2)}::uuid,'register_work','forged-work-link','{{}}'::jsonb,{lit(work_one)}::uuid);",
+        check=False,
+    )
+    wrong_event_scope = psql(
+        "INSERT INTO aep.work_events(project_id,work_id,event_type,session_id) VALUES "
+        f"({lit(project2)}::uuid,{lit(work_one)}::uuid,'work_registered',{lit(str(uuid4()))}::uuid);",
+        check=False,
+    )
+    if wrong_request_scope.returncode == 0 or wrong_event_scope.returncode == 0:
+        raise AssertionError("WorkRequest or WorkEvent accepted a cross-project Work reference")
+    print("PASS Stage 1B: WorkRequest and WorkEvent project/work scopes are enforced by composite foreign keys")
+
     execution_one = str(uuid4())
     execution_two = str(uuid4())
     session_one = str(uuid4())
@@ -284,6 +299,13 @@ def main() -> None:
     )
     if scalar(f"SELECT current_execution_id::text || '|' || fence_generation::text FROM aep.works WHERE work_id={lit(work_one)}::uuid;") != f"{execution_one}|1":
         raise AssertionError("Work current execution/fence projection did not retain the same-work Execution")
+    wrong_current_execution = psql(
+        f"UPDATE aep.works SET current_execution_id={lit(execution_two)}::uuid WHERE work_id={lit(work_one)}::uuid;",
+        check=False,
+    )
+    if wrong_current_execution.returncode == 0:
+        raise AssertionError("Work accepted an Execution belonging to a different Work")
+
     second_active = psql(
         "INSERT INTO aep.executions(work_id,session_id,attempt_no,status,lease_until,fence) VALUES "
         f"({lit(work_one)}::uuid,{lit(str(uuid4()))}::uuid,2,'claimed',now()+interval '5 minutes',2);",
