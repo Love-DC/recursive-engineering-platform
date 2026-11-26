@@ -7,9 +7,9 @@ Authoritative behavioral definitions are in [Snapshot v2.0](https://github.com/L
 | T01 | Concurrent canonical registration yields one Work | 1A–2 | PASS — two independent PostgreSQL sessions are synchronized at a database advisory-lock rendezvous; the controller releases only after both are observed waiting, then one canonical Work is committed and linked. Exact integrated evidence: see the [canonical PR #9 exact-HEAD evidence record](https://github.com/Love-DC/recursive-engineering-platform/pull/9#issuecomment-7183275628), maintained in place as the candidate advances. |
 | T02 | Idempotency replay and payload conflict | 1A–2 | PASS — replay returns same work_id; changed payload with same key conflicts |
 | T03 | Lost registration response recovers without duplicate Work/ExternalRef | 1A–3 | PARTIAL — Work registration retry from a new session passed; external operation receipt reconciliation is not implemented |
-| T04 | Concurrent claim race yields one current execution | 2 | PARTIAL — one-active Execution unique index tested; atomic claim protocol and concurrent claim RPC not implemented |
-| T05 | Lease takeover advances fence and rejects stale writes | 2 | PARTIAL — per-Work attempt_no and fence uniqueness are each behavior-tested with terminal Execution probes that isolate the intended constraints. Lease expiry/takeover and stale-write rejection are not implemented |
-| T06 | Same physical resource/ref/write set is mutually excluded across projects | 2 | PARTIAL — exact active ResourceClaim physical resource/ref/conflict_key conflict is tested across projects, and each of the three composite FKs has a distinct targeted negative test. Atomic claim and path-overlap semantics are not implemented |
+| T04 | Concurrent claim race yields one current execution | 2A | PASS — the atomic claim RPC serializes two independent PostgreSQL connections; exactly one current Execution, Work pointer, and fence are committed. Run #54 is historical evidence for the pre-remediation candidate; the amended PR #38 requires fresh exact-HEAD CI and independent re-review. |
+| T05 | Lease takeover advances fence and rejects stale writes | 2A | PASS — expired takeover creates a higher-fence attempt; the superseded attempt cannot renew or complete, while current renewal/completion succeeds. Lease-boundary and stale-attempt scenarios passed in historical Run #54; fresh exact-HEAD CI and independent re-review of amended PR #38 remain pending. |
+| T06 | Same physical resource/ref/write set is mutually excluded across projects | 2A | PARTIAL — atomic claim reserves all requirements for the exact physical Resource/ref/conflict key across projects; supported GitHub repository refs use conservative whole-repository exclusion (`conflict_key='*'`). Path-overlap and narrower write-set concurrency remain unsupported. Historical Run #54 passed T06; amended-candidate exact-HEAD CI/re-review are pending. |
 | T07 | Concurrent two-node dependency insertion cannot create a cycle | 2 | PARTIAL — typed depends_on relation and graph reference constraints tested; graph locking/atomic cycle prevention not implemented |
 | T08 | Cross-project graph writes require authorized shared graph | 2 | PARTIAL — shared graph membership and non-null write grant reference are modeled; approved-grant checks and graph mutation authorization not implemented |
 | T09 | READY invalidation after dependency/authority change | 2 | NOT IMPLEMENTED |
@@ -30,6 +30,15 @@ Authoritative behavioral definitions are in [Snapshot v2.0](https://github.com/L
 | T24 | Event/handover/ack replay is idempotent and stale versions rejected | 2–4 | PARTIAL — Work/evidence/receipt event append-only constraints tested; versioned transition and replay protocol not implemented |
 | T25 | Derived memory/index rebuilds from source evidence | 4 | NOT IMPLEMENTED |
 | T26 | Clean database migration chain has unique ordered versions | 1A–1B | PASS — both migrations applied to clean PostgreSQL 17.12 in CI |
+
+## Stage 2A candidate status — not merged
+
+- Implementation candidate: [PR #38](https://github.com/Love-DC/recursive-engineering-platform/pull/38), intentionally kept Open + Draft.
+- Initial reviewed source: base `57cdbb1814fa967c6237e013d0e4415590fb1b0f`, HEAD `285dbc092744cb5d0f88ab391e25a84257298919`, tree `8e1593768c08a5b96901f6af88a4d9d1cf1946b0`.
+- Initial exact-HEAD Run #54 passed both PostgreSQL 17.12 integration/protocol tests and repository contract checks.
+- Independent review on that exact source returned `CHANGES_REQUIRED`: resource identity retargeting, missing claim-time dependency eligibility checks, and stale Stage 2A documentation.
+- Remediation now adds immutable physical Resource identity, claim-time GitHub repository/ref revalidation, same-project active dependency prerequisite checks with shared/inactive graph fail-closed behavior, and adversarial tests. The amended HEAD still requires a fresh exact-HEAD CI run and another independent review. Run #54 is not evidence for the amended HEAD.
+- PR #38 remains unmerged; Issue #10 remains open. No Supabase deployment or production write path is implied.
 
 ## Evidence history and current-candidate slot
 
