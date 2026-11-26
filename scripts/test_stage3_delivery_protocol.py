@@ -95,6 +95,14 @@ def test_manifest_sql_validation(resource_id: str, manifest: dict) -> None:
         "SQL RPC rejects non-numeric manifest schema version",
     )
 
+    malformed = json.loads(json.dumps(manifest))
+    malformed["schema_version"] = None
+    expect_error(
+        manifest_registration_sql(resource_id, malformed),
+        "schema_version must be numeric 1",
+        "SQL RPC rejects JSON-null manifest schema version",
+    )
+
     status_mutations = (
         ("missing", lambda capability: capability.pop("status")),
         ("JSON null", lambda capability: capability.update(status=None)),
