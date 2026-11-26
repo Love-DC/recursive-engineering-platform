@@ -757,7 +757,7 @@ def main() -> None:
         f"jsonb_build_array(jsonb_build_object('resource_id',{lit(resource_2)},"
         "'resource_ref','refs/heads/a-valid'),"
         f"jsonb_build_object('resource_id',{lit(resource_2)},'resource_ref','refs/heads/z-invalid.'))); RESET ROLE;",
-        "work_resource_requirements_github_branch_ref_ck",
+        "WorkResourceRequirement requires an active GitHub repository and canonical fully-qualified branch ref",
         "atomic rollback of invalid WorkResourceRequirement set replacement",
     )
     if scalar(
