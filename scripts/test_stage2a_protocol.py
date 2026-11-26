@@ -683,43 +683,37 @@ def main() -> None:
 
     # Security-definer entry points are narrowly exposed; every definer routine
     # has the non-bypass owner and a fixed search_path, with RLS forced on tables.
-    security = scalar("""
-      SELECT count(*) FROM pg_proc AS proc
+    # Audit the complete schema inventory, not only the Stage 2A routines.
+    # Stage 1 contributes register_work; Stage 2A contributes eight more.
+    security_inventory = scalar("""
+      SELECT count(*)::text || '|' ||
+             count(*) FILTER (
+               WHERE owner_role.rolname='aep_owner'
+                 AND NOT owner_role.rolsuper
+                 AND NOT owner_role.rolbypassrls
+                 AND replace(array_to_string(proc.proconfig,','),' ','')='search_path=pg_catalog,aep'
+                 AND NOT COALESCE((
+                   SELECT bool_or(acl.grantee=0 AND acl.privilege_type='EXECUTE')
+                   FROM aclexplode(COALESCE(proc.proacl,acldefault('f',proc.proowner))) AS acl
+                 ),false)
+             )::text || '|' ||
+             string_agg(proc.proname,',' ORDER BY proc.proname)
+      FROM pg_proc AS proc
       JOIN pg_namespace AS ns ON ns.oid=proc.pronamespace
       JOIN pg_roles AS owner_role ON owner_role.oid=proc.proowner
-      WHERE ns.nspname='aep'
-        AND proc.proname IN (
-          'claim_work','renew_execution','finish_execution',
-          'guard_work_resource_requirement','guard_project_resource_write_grant',
-          'guard_approved_grant_decision_mutation','guard_resource_archive'
+      WHERE ns.nspname='aep' AND proc.prosecdef;
+    """)
+    expected_security_inventory = (
+        "9|9|claim_work,finish_execution,guard_approved_grant_decision_mutation,"
+        "guard_project_resource_write_grant,guard_resource_archive,"
+        "guard_work_resource_requirement,register_work,renew_execution,"
+        "set_work_resource_requirements"
+    )
+    if security_inventory != expected_security_inventory:
+        raise AssertionError(
+            "Complete SECURITY DEFINER inventory/owner/search_path/PUBLIC audit failed: "
+            f"{security_inventory!r}; expected {expected_security_inventory!r}"
         )
-        AND proc.prosecdef
-        AND owner_role.rolname='aep_owner'
-        AND NOT owner_role.rolsuper
-        AND NOT owner_role.rolbypassrls
-        AND replace(array_to_string(proc.proconfig,','),' ','')='search_path=pg_catalog,aep'
-        AND NOT COALESCE((
-          SELECT bool_or(acl.grantee=0 AND acl.privilege_type='EXECUTE')
-          FROM aclexplode(COALESCE(proc.proacl,acldefault('f',proc.proowner))) AS acl
-        ),false);
-    """)
-    if security != "7":
-        raise AssertionError(f"SECURITY DEFINER owner/search_path/PUBLIC audit failed: {security}/7")
-    all_definers = scalar("""
-      SELECT count(*) FROM pg_proc AS proc
-      JOIN pg_namespace AS ns ON ns.oid=proc.pronamespace
-      JOIN pg_roles AS owner_role ON owner_role.oid=proc.proowner
-      WHERE ns.nspname='aep' AND proc.prosecdef
-        AND owner_role.rolname='aep_owner'
-        AND NOT owner_role.rolsuper AND NOT owner_role.rolbypassrls
-        AND replace(array_to_string(proc.proconfig,','),' ','')='search_path=pg_catalog,aep'
-        AND NOT COALESCE((
-          SELECT bool_or(acl.grantee=0 AND acl.privilege_type='EXECUTE')
-          FROM aclexplode(COALESCE(proc.proacl,acldefault('f',proc.proowner))) AS acl
-        ),false);
-    """)
-    if all_definers != "8":
-        raise AssertionError(f"Not every SECURITY DEFINER in schema aep meets owner/path/PUBLIC rules: {all_definers}/8")
     runtime_grants = scalar("""
       SELECT
         has_function_privilege('aep_runtime','aep.set_work_resource_requirements(uuid,jsonb)','EXECUTE')::text
@@ -802,14 +796,30 @@ def main() -> None:
         raise AssertionError("aep_runtime unexpectedly received direct canonical-table access")
     print("PASS security: SECURITY DEFINER ownership, fixed paths, PUBLIC revocation, runtime EXECUTE, forced RLS and no direct reads")
 
-    # Requirement declarations cannot be edited after the first claim attempt.
+    # Requirement declarations cannot be edited after the first claim attempt,
+    # through either direct table DML or the SECURITY DEFINER declaration RPC.
+    expect_error(
+        "UPDATE aep.work_resource_requirements SET resource_ref='refs/heads/changed' "
+        f"WHERE work_id={lit(winner_work)}::uuid;",
+        "immutable after execution begins",
+        "requirement update after execution",
+    )
     expect_error(
         "DELETE FROM aep.work_resource_requirements "
         f"WHERE work_id={lit(winner_work)}::uuid;",
         "immutable after execution begins",
-        "requirement mutation after execution",
+        "requirement delete after execution",
     )
-    print("PASS immutability: requirement set cannot be changed after execution starts")
+    expect_error(
+        "SET ROLE aep_runtime; "
+        "SELECT aep.set_work_resource_requirements("
+        f"{lit(runtime_work)}::uuid,"
+        f"jsonb_build_array(jsonb_build_object('resource_id',{lit(resource_2)},"
+        "'resource_ref','refs/heads/changed-after-claim'))); RESET ROLE;",
+        "immutable after execution begins",
+        "runtime requirement RPC after execution",
+    )
+    print("PASS immutability: requirement INSERT/UPDATE/DELETE and runtime declaration RPC are fenced after execution starts")
 
     psql("DROP FUNCTION public.aep_test_claim_rendezvous(uuid,uuid,integer);")
     print("All Stage 2A PostgreSQL protocol tests passed.")
