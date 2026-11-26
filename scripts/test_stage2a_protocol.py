@@ -240,7 +240,7 @@ def test_live_lease_boundary_race(work_id: str, current: tuple[str, int, int, st
         assert holder.stdin is not None and holder.stdout is not None
         holder.stdin.write(
             "BEGIN; "
-            f"SELECT work_id::text FROM aep.works WHERE work_id={lit(work_id)}::uuid FOR UPDATE;\\n"
+            f"SELECT work_id::text FROM aep.works WHERE work_id={lit(work_id)}::uuid FOR UPDATE;\n"
         )
         holder.stdin.flush()
         ready, _, _ = select.select([holder.stdout], [], [], 10)
@@ -298,7 +298,7 @@ def test_live_lease_boundary_race(work_id: str, current: tuple[str, int, int, st
         if expired != "true":
             raise AssertionError("the queued Work lease did not reach its expiry boundary")
 
-        holder.stdin.write("COMMIT;\\n")
+        holder.stdin.write("COMMIT;\n")
         holder.stdin.flush()
         holder.stdin.close()
         holder.wait(timeout=10)
