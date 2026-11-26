@@ -272,6 +272,24 @@ def main() -> None:
     )
     if padded_identity.returncode == 0 or padded_kind.returncode == 0 or unsupported_identity_version.returncode == 0:
         raise AssertionError("Work registration accepted padded identity input or an undefined identity version")
+
+    case_upper_work = scalar(
+        register(project_id, "case-upper", "CaseSensitiveIdentity", title="case upper")
+    ).split("|", 1)[0]
+    case_lower_work = scalar(
+        register(project_id, "case-lower", "casesensitiveidentity", title="case lower")
+    ).split("|", 1)[0]
+    if case_upper_work == case_lower_work:
+        raise AssertionError("Work identity v1 unexpectedly case-folded distinct identity keys")
+
+    nfc_work = scalar(
+        register(project_id, "unicode-nfc", "\u00e9", title="Unicode NFC identity")
+    ).split("|", 1)[0]
+    nfd_work = scalar(
+        register(project_id, "unicode-nfd", "e\u0301", title="Unicode NFD identity")
+    ).split("|", 1)[0]
+    if nfc_work == nfd_work:
+        raise AssertionError("Work identity v1 unexpectedly normalized Unicode NFC/NFD identity keys")
     if scalar(
         "SELECT count(*) FROM aep.works "
         "WHERE project_id=" + lit(project_id) + "::uuid "
@@ -285,7 +303,7 @@ def main() -> None:
     )
     if direct_padded.returncode == 0:
         raise AssertionError("Direct Work insert bypassed canonical identity input constraints")
-    print("PASS T04: Work identity v1 rejects edge whitespace and undefined versions without case folding")
+    print("PASS T04: Work identity v1 rejects edge whitespace and preserves exact case and Unicode NFC/NFD text")
 
     external = {
         "provider":"github","host":"github.com","resource_key":"repo:1471589776",
@@ -301,18 +319,23 @@ def main() -> None:
         raise AssertionError(f"T21 ExternalRef linking failed: {ext_a}, {ext_b}, count={ext_count}")
     conflict = psql(register(project_id,"ext-conflict","different-work",title="rollback",
                              external=external),check=False)
-    rollback_count = scalar("SELECT count(*) FROM aep.works WHERE identity_key='different-work';")
-    rollback_request_count = scalar(
+    work_rollback_count = scalar("SELECT count(*) FROM aep.works WHERE identity_key='different-work';")
+    request_rollback_count = scalar(
         "SELECT count(*) FROM aep.work_requests WHERE project_id=" + lit(project_id) +
         "::uuid AND idempotency_key='ext-conflict';"
     )
-    rollback_event_count = scalar(
+    unemitted_event_count = scalar(
         "SELECT count(*) FROM aep.work_events WHERE event_payload->>'request_key'='ext-conflict';"
     )
-    if conflict.returncode == 0 or rollback_count != "0" or rollback_request_count != "0" or rollback_event_count != "0":
+    if (
+        conflict.returncode == 0
+        or work_rollback_count != "0"
+        or request_rollback_count != "0"
+        or unemitted_event_count != "0"
+    ):
         raise AssertionError(
-            "T21 conflicting ExternalRef did not roll back Work, WorkRequest, and WorkEvent "
-            f"(counts={rollback_count}/{rollback_request_count}/{rollback_event_count})"
+            "T21 ExternalRef conflict must roll back Work and WorkRequest and emit no WorkEvent "
+            f"(counts={work_rollback_count}/{request_rollback_count}/{unemitted_event_count})"
         )
     external_ref_unique_name = scalar(
         "SELECT conname FROM pg_constraint "
@@ -327,7 +350,7 @@ def main() -> None:
         external_ref_unique_name,
         "ExternalRef physical external-object uniqueness",
     )
-    print("PASS T21 slice: ExternalRef uniqueness and full Work/WorkRequest/WorkEvent rollback")
+    print("PASS T21 slice: ExternalRef uniqueness; Work and WorkRequest rollback; no WorkEvent emitted")
 
     function = "'aep.register_work(uuid,text,uuid,text,text,integer,text,text,jsonb,jsonb)'::regprocedure"
     security = scalar(f"""
@@ -407,6 +430,12 @@ def main() -> None:
         "VALUES('github','GITHUB.COM','repository','case-host','repository:case-host');",
         "resources_host_canonical_ck",
         "Resource host canonical form",
+    )
+    expect_constraint(
+        "INSERT INTO aep.resources(provider,host,resource_type,stable_resource_id,canonical_key) "
+        "VALUES('github','github.com','Repository','case-type','Repository:case-type');",
+        "resources_type_canonical_ck",
+        "Resource type canonical form",
     )
     expect_constraint(
         "INSERT INTO aep.resources(provider,host,resource_type,stable_resource_id,canonical_key) "
@@ -558,6 +587,13 @@ def main() -> None:
         f"({lit(project_id)}::uuid,{lit(work_one)}::uuid,{lit(work_one_request)}::uuid,"
         f"'request_replayed',{lit(str(uuid4()))}::uuid);"
     )
+    null_request_event = scalar(
+        "INSERT INTO aep.work_events(project_id,work_id,request_id,event_type,session_id) VALUES "
+        f"({lit(project_id)}::uuid,{lit(work_one)}::uuid,NULL,'request_replayed',{lit(str(uuid4()))}::uuid) "
+        "RETURNING event_id;"
+    )
+    if not null_request_event:
+        raise AssertionError("A valid WorkEvent with NULL request_id was not accepted")
     expect_constraint(
         "INSERT INTO aep.work_events(project_id,work_id,request_id,event_type,session_id) VALUES "
         f"({lit(project_id)}::uuid,{lit(work_one)}::uuid,{lit(work_child_request)}::uuid,"
@@ -565,7 +601,7 @@ def main() -> None:
         "work_events_project_work_request_fk",
         "WorkEvent request must belong to the same Work",
     )
-    print("PASS Stage 1B: WorkRequest and WorkEvent project/work/request scope is enforced by composite foreign keys")
+    print("PASS Stage 1B: WorkEvent request scope is enforced; valid WorkEvent with NULL request_id remains allowed")
 
     execution_one = str(uuid4())
     execution_two = str(uuid4())
@@ -622,6 +658,33 @@ def main() -> None:
         "INSERT INTO aep.resource_claims(project_id,resource_id,work_id,execution_id,resource_ref,write_set_kind,conflict_key,status,lease_until,fence) VALUES "
         f"({lit(project_id)}::uuid,{lit(resource_id)}::uuid,{lit(work_one)}::uuid,{lit(execution_one)}::uuid,'refs/heads/main','repository_ref','*','active',now()+interval '5 minutes',1);"
     )
+    # The active fully-qualified branch claim above represents the same physical
+    # ref as the shorthand alias "main". The alias cannot create a second
+    # reserved/active claim because the database rejects non-canonical refs.
+    expect_constraint(
+        "INSERT INTO aep.resource_claims(project_id,resource_id,work_id,execution_id,resource_ref,write_set_kind,conflict_key,status,lease_until,fence) "
+        f"VALUES({lit(project2)}::uuid,{lit(resource_id)}::uuid,{lit(work_two)}::uuid,{lit(execution_two)}::uuid,'main','repository_ref','*','reserved',now()+interval '5 minutes',1);",
+        "resource_claims_github_branch_ref_canonical_ck",
+        "GitHub branch shorthand alias cannot coexist with an active full-ref claim",
+    )
+    expect_constraint(
+        "INSERT INTO aep.resource_claims(project_id,resource_id,work_id,execution_id,resource_ref,write_set_kind,conflict_key,status,lease_until,fence) "
+        f"VALUES({lit(project2)}::uuid,{lit(resource_id)}::uuid,{lit(work_two)}::uuid,{lit(execution_two)}::uuid,'HEAD','repository_ref','*','active',now()+interval '5 minutes',1);",
+        "resource_claims_github_branch_ref_canonical_ck",
+        "Git symbolic HEAD alias is rejected",
+    )
+    expect_constraint(
+        "INSERT INTO aep.resource_claims(project_id,resource_id,work_id,execution_id,resource_ref,write_set_kind,conflict_key,status,lease_until,fence) "
+        f"VALUES({lit(project2)}::uuid,{lit(resource_id)}::uuid,{lit(work_two)}::uuid,{lit(execution_two)}::uuid,'refs/remotes/origin/HEAD','repository_ref','*','active',now()+interval '5 minutes',1);",
+        "resource_claims_github_branch_ref_canonical_ck",
+        "Git remote symbolic HEAD alias is rejected",
+    )
+    if scalar(
+        "SELECT count(*) FROM aep.resource_claims "
+        f"WHERE resource_id={lit(resource_id)}::uuid AND resource_ref='refs/heads/main' "
+        "AND status IN ('reserved','active');"
+    ) != "1":
+        raise AssertionError("A shorthand/symbolic alias created a second reserved/active claim for the same GitHub branch")
     resource_race = psql(
         "INSERT INTO aep.resource_claims(project_id,resource_id,work_id,execution_id,resource_ref,write_set_kind,conflict_key,status,lease_until,fence) VALUES "
         f"({lit(project2)}::uuid,{lit(resource_id)}::uuid,{lit(work_two)}::uuid,{lit(execution_two)}::uuid,'refs/heads/main','repository_ref','*','active',now()+interval '5 minutes',1);",
