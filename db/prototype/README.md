@@ -18,12 +18,12 @@ This directory contains a PostgreSQL experiment for Stage 1A/1B.
 
 ## Verification
 
-CI applies both ordered migrations to a clean PostgreSQL 17.12 database and exercises them with integration tests. PR [#9](https://github.com/Love-DC/recursive-engineering-platform/pull/9) remains open and unmerged; independent review findings are being remediated.
+CI applies the ordered migrations to a clean PostgreSQL 17.12 database and exercises the prototype integration tests. PR [#9](https://github.com/Love-DC/recursive-engineering-platform/pull/9) remains open and unmerged; database and documentation remediation has been integrated, and refreshed independent final acceptance is pending.
 
 Historical evidence (not final candidate evidence):
 - Run #24 ([45734761932](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45734761932)) passed for old SHA `d055fc1d6fbc7f83d83e35a43fefd6d89a90db43`.
 - Run #27 ([45735069544](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45735069544)) passed for review SHA `5648ce0de9e3d9bd6460645819d75bffb35dd772`.
-- The final integrated candidate SHA and its matching CI run remain **PENDING** until all remediation changes are merged and final exact-SHA CI completes.
+- Final post-remediation candidate: PR #9 HEAD `de713207ebabcd20efe84df912f781985f6156fb`; [Actions run #31](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45756309441) passed on that exact SHA. PostgreSQL 17.12 reports T01 rendezvous success. The run uses a clean disposable database; it does not test populated-database upgrades.
 
 See [the test harness](../../scripts/test_postgres_prototype.py).
 
