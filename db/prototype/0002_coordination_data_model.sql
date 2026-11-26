@@ -69,7 +69,10 @@ CREATE TABLE aep.project_resources (
   created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   revoked_at timestamptz,
   PRIMARY KEY (project_id, resource_id),
-  CHECK ((status = 'active' AND revoked_at IS NULL) OR status = 'revoked')
+  CHECK (
+    (status = 'active' AND revoked_at IS NULL)
+    OR (status = 'revoked' AND revoked_at IS NOT NULL)
+  )
 );
 
 CREATE INDEX project_resources_resource_idx ON aep.project_resources(resource_id, status);
@@ -164,8 +167,10 @@ CREATE TABLE aep.resource_claims (
   released_at timestamptz,
   FOREIGN KEY (work_id, execution_id)
     REFERENCES aep.executions(work_id, execution_id),
-  CHECK ((status IN ('reserved','active') AND released_at IS NULL)
-      OR status IN ('released','expired','superseded'))
+  CHECK (
+    (status IN ('reserved','active') AND released_at IS NULL)
+    OR (status IN ('released','expired','superseded') AND released_at IS NOT NULL)
+  )
 );
 
 -- The MVP conflict_key for write_set_kind=repository_ref is '*', conservatively
@@ -193,7 +198,10 @@ CREATE TABLE aep.work_relations (
     OR (relation_type = 'possible_duplicate' AND required IS NULL AND dependency_graph_id IS NULL
         AND source_work_id < target_work_id)
   ),
-  CHECK ((status = 'active' AND removed_at IS NULL) OR status = 'removed')
+  CHECK (
+    (status = 'active' AND removed_at IS NULL)
+    OR (status = 'removed' AND removed_at IS NOT NULL)
+  )
 );
 
 CREATE UNIQUE INDEX work_relations_active_exact_uq
@@ -217,7 +225,8 @@ CREATE TABLE aep.evidence (
   provenance jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(provenance) = 'object'),
   payload jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(payload) = 'object'),
   FOREIGN KEY (project_id, work_id) REFERENCES aep.works(project_id, work_id),
-  FOREIGN KEY (work_id, execution_id) REFERENCES aep.executions(work_id, execution_id)
+  FOREIGN KEY (work_id, execution_id) REFERENCES aep.executions(work_id, execution_id),
+  CHECK (execution_id IS NULL OR work_id IS NOT NULL)
 );
 
 CREATE INDEX evidence_project_observed_idx ON aep.evidence(project_id, observed_at DESC);
@@ -246,6 +255,7 @@ CREATE TABLE aep.operation_receipts (
   updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   reconciled_at timestamptz,
   FOREIGN KEY (work_id, execution_id) REFERENCES aep.executions(work_id, execution_id),
+  CHECK (execution_id IS NULL OR work_id IS NOT NULL),
   UNIQUE (provider, operation_key),
   CHECK (status <> 'reconciled' OR (reconciliation_status = 'reconciled' AND reconciled_at IS NOT NULL)),
   CHECK (status <> 'succeeded' OR receipt_payload IS NOT NULL)
