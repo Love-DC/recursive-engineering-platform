@@ -433,7 +433,7 @@ def main() -> None:
     )
     dependency_blocked_state = scalar(
         "SELECT status || '|' || COALESCE(current_execution_id::text,'null') "
-        "|| '|' || fence_generation::text || '|' "
+        "|| '|' || fence_generation::text || '|' || "
         "(SELECT count(*)::text FROM aep.executions WHERE work_id=works.work_id) "
         f"FROM aep.works WHERE work_id={lit(dependency_dependent)}::uuid;"
     )
@@ -476,7 +476,7 @@ def main() -> None:
     for blocked_work in (shared_dependent, archived_dependent):
         blocked_state = scalar(
             "SELECT status || '|' || COALESCE(current_execution_id::text,'null') "
-            "|| '|' || fence_generation::text || '|' "
+            "|| '|' || fence_generation::text || '|' || "
             "(SELECT count(*)::text FROM aep.executions WHERE work_id=works.work_id) "
             f"FROM aep.works WHERE work_id={lit(blocked_work)}::uuid;"
         )
@@ -806,7 +806,7 @@ def main() -> None:
     )
     corrupt_state = scalar(
         "SELECT status || '|' || COALESCE(current_execution_id::text,'null') "
-        "|| '|' || fence_generation::text || '|' "
+        "|| '|' || fence_generation::text || '|' || "
         "(SELECT count(*)::text FROM aep.executions WHERE work_id=works.work_id) "
         f"FROM aep.works WHERE work_id={lit(corrupt_work)}::uuid;"
     )
