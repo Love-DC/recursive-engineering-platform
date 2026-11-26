@@ -301,7 +301,19 @@ CREATE TRIGGER operation_receipt_events_append_only
 BEFORE UPDATE OR DELETE ON aep.operation_receipt_events
 FOR EACH ROW EXECUTE FUNCTION aep.reject_work_event_mutation();
 
-DO $$
+ALTER TABLE aep.owner_decisions OWNER TO aep_owner;
+ALTER TABLE aep.resources OWNER TO aep_owner;
+ALTER TABLE aep.project_resources OWNER TO aep_owner;
+ALTER TABLE aep.dependency_graphs OWNER TO aep_owner;
+ALTER TABLE aep.dependency_graph_members OWNER TO aep_owner;
+ALTER TABLE aep.executions OWNER TO aep_owner;
+ALTER TABLE aep.resource_claims OWNER TO aep_owner;
+ALTER TABLE aep.work_relations OWNER TO aep_owner;
+ALTER TABLE aep.evidence OWNER TO aep_owner;
+ALTER TABLE aep.operation_receipts OWNER TO aep_owner;
+ALTER TABLE aep.operation_receipt_events OWNER TO aep_owner;
+
+DO $
 DECLARE t text;
 BEGIN
   FOREACH t IN ARRAY ARRAY[
