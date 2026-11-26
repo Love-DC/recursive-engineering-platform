@@ -1,40 +1,40 @@
 # Acceptance Test Map — T01–T26
 
-Authoritative behavioral definitions are in [Snapshot v2.0](https://github.com/Love-DC/recursive-engineering-platform/issues/1#issuecomment-7161657103). A PASS below means the listed slice was exercised against the exact PR candidate in ephemeral PostgreSQL CI; it does not imply a production deployment or a broader test not named.
+Authoritative behavioral definitions are in [Snapshot v2.0](https://github.com/Love-DC/recursive-engineering-platform/issues/1#issuecomment-7161657103). PASS and PARTIAL distinguish a tested schema/prototype slice from the complete end-to-end architecture guarantee.
 
 | ID | Required proof | Planned stage | Status |
 |---|---|---:|---|
-| T01 | Concurrent canonical registration of identical work yields one canonical Work | 1–2 | PASS — prototype slice, PR #7 head `60e10aa129be85754cab2025580f7fed65bdf7a9` |
-| T02 | Idempotency replay returns prior result; payload mismatch conflicts | 1–2 | PASS — prototype slice, PR #7 head `60e10aa129be85754cab2025580f7fed65bdf7a9` |
-| T03 | Registration response loss and retry finds the same Work / ExternalRef | 1–2 | PARTIAL — Work retry across a fresh session passed; ExternalRef receipt-loss reconciliation is not implemented |
-| T04 | Concurrent claim race yields one current execution | 2 | NOT IMPLEMENTED |
-| T05 | Lease takeover advances execution/fence; stale state writes are rejected | 2 | NOT IMPLEMENTED |
-| T06 | Conflicting writes to one physical resource are mutually excluded | 1–2 | NOT IMPLEMENTED |
-| T07 | Concurrent dependency insertion cannot create a two-node cycle | 2 | NOT IMPLEMENTED |
-| T08 | Bulk/multi-edge dependency mutation cannot introduce a larger cycle | 2 | NOT IMPLEMENTED |
-| T09 | READY eligibility is invalidated/recomputed after dependency or authority changes | 2 | NOT IMPLEMENTED |
-| T10 | Fresh session can recover current work/execution/delivery/lease state from durable records | 4 | NOT IMPLEMENTED |
-| T11 | Recovery does not rely on the previous chat transcript | 4 | NOT IMPLEMENTED |
-| T12 | Retry/takeover receives an independent delivery ref and old attempt cannot overwrite current delivery | 3 | NOT IMPLEMENTED |
-| T13 | Stale external merge is detected, recorded, and triggers evidence invalidation/revalidation | 3 | NOT IMPLEMENTED |
-| T14 | Same-principal process review is recorded as COMMENTED and is not misrepresented as native approval | 3 | NOT IMPLEMENTED |
-| T15 | CI and post-merge validation are pinned to exact SHAs and remain distinct from deployment | 3 | NOT IMPLEMENTED |
-| T16 | OwnerDecision requires direct provenance and version/scope; stale authorization is invalidated | 1–2 | NOT IMPLEMENTED |
-| T17 | Cross-project reads/search and forged project/session labels cannot bypass authorization | 1–2 | NOT IMPLEMENTED |
-| T18 | Database roles, GRANT/RLS, SECURITY DEFINER, search_path, EXECUTE, and bypass roles are audited | 1 | PARTIAL — prototype grants, function owner, search_path, forced RLS and direct-table denial checked; project authorization and production roles not audited |
-| T19 | Empty queue + reproducible source issue leads to one atomically registered Work | 4 | NOT IMPLEMENTED |
-| T20 | Discovery/decomposition stops at configured budgets and detects no progress | 4 | NOT IMPLEMENTED |
-| T21 | Lost external operation receipt is recovered by reconciliation without duplicate external creation | 3 | PARTIAL — ExternalRef uniqueness, idempotent link and conflict rollback passed; external operation receipt reconciliation is not implemented |
-| T22 | Adapter capabilities are declared honestly; unsupported operations are blocked, not claimed | 3 | NOT IMPLEMENTED |
-| T23 | Parent completion correctly aggregates required/optional child outcomes | 2 | NOT IMPLEMENTED |
-| T24 | Event, handover, and acknowledgement replay is idempotent and stale versions cannot transition state | 2–4 | NOT IMPLEMENTED |
-| T25 | Derived memory/index can be rebuilt from original evidence without changing provenance or isolation | 4 | NOT IMPLEMENTED |
-| T26 | Clean database migration validates unique versions and complete dependency order | 1 | PASS — prototype migration applied to a clean PostgreSQL 17.12 database, PR #7 head `60e10aa129be85754cab2025580f7fed65bdf7a9` |
+| T01 | Concurrent canonical registration yields one Work | 1A–2 | PASS — two independent PostgreSQL connections, different request keys, one shared work_id |
+| T02 | Idempotency replay and payload conflict | 1A–2 | PASS — replay returns same work_id; changed payload with same key conflicts |
+| T03 | Lost registration response recovers without duplicate Work/ExternalRef | 1A–3 | PARTIAL — Work registration retry from a new session passed; external operation receipt reconciliation is not implemented |
+| T04 | Concurrent claim race yields one current execution | 2 | PARTIAL — one-active Execution unique index tested; atomic claim protocol and concurrent claim RPC not implemented |
+| T05 | Lease takeover advances fence and rejects stale writes | 2 | PARTIAL — Execution attempt/fence fields and per-Work uniqueness tested; lease expiry/takeover/stale-write enforcement not implemented |
+| T06 | Same physical resource/ref/write set is mutually excluded across projects | 2 | PARTIAL — exact ResourceClaim conflict key and project/resource/work foreign keys tested; atomic claim protocol and path-overlap semantics not implemented |
+| T07 | Concurrent two-node dependency insertion cannot create a cycle | 2 | PARTIAL — typed depends_on relation and graph reference constraints tested; graph locking/atomic cycle prevention not implemented |
+| T08 | Cross-project graph writes require authorized shared graph | 2 | PARTIAL — shared graph membership and non-null write grant reference are modeled; approved-grant checks and graph mutation authorization not implemented |
+| T09 | READY invalidation after dependency/authority change | 2 | NOT IMPLEMENTED |
+| T10 | Fresh session recovers durable work/execution/delivery/lease state | 4 | NOT IMPLEMENTED |
+| T11 | Recovery does not rely on prior chat transcript | 4 | NOT IMPLEMENTED |
+| T12 | Retry/takeover receives an independent delivery ref | 3 | PARTIAL — Execution stores delivery branch/base/head/PR fields; per-attempt delivery lifecycle is not implemented |
+| T13 | Stale external merge is reconciled and evidence invalidated | 3 | NOT IMPLEMENTED |
+| T14 | Same-principal process review is distinct from native approval | 3 | NOT IMPLEMENTED |
+| T15 | Exact-SHA CI, merge SHA validation and deployment remain distinct | 3 | NOT IMPLEMENTED |
+| T16 | OwnerDecision requires direct provenance and scope/version | 1B–2 | PARTIAL — approved status requires explicit direct-Owner provenance fields; actual Owner event verification/supersede enforcement is not implemented |
+| T17 | Project authorization and cross-project retrieval isolation | 1B–2 | PARTIAL — composite FKs block mismatched Work/project links; authenticated read/search authorization is not implemented |
+| T18 | GRANT/RLS/SECURITY DEFINER/search_path/bypass roles audited | 1A–2 | PARTIAL — prototype tests verify selected role/function properties, non-bypass object owner, forced RLS, no direct runtime table read, and append-only triggers; production project authorization and Supabase role audit are not implemented |
+| T19 | Empty queue and source evidence create one canonical Work | 4 | NOT IMPLEMENTED |
+| T20 | Discovery/decomposition stops at budgets and detects no progress | 4 | NOT IMPLEMENTED |
+| T21 | External operation receipt loss reconciles without duplicate side effect | 1A–3 | PARTIAL — ExternalRef uniqueness/link/conflict rollback and unique OperationReceipt key/event ledger tested; external operation execution/receipt reconciliation not implemented |
+| T22 | Adapter capabilities truthfully declare unsupported operations | 3 | NOT IMPLEMENTED |
+| T23 | Parent completion aggregates required/optional children | 2 | NOT IMPLEMENTED |
+| T24 | Event/handover/ack replay is idempotent and stale versions rejected | 2–4 | PARTIAL — Work/evidence/receipt event append-only constraints tested; versioned transition and replay protocol not implemented |
+| T25 | Derived memory/index rebuilds from source evidence | 4 | NOT IMPLEMENTED |
+| T26 | Clean database migration chain has unique ordered versions | 1A–1B | PASS — both migrations applied to clean PostgreSQL 17.12 in CI |
 
-## Evidence
+## Exact evidence
 
-- PR: [#7](https://github.com/Love-DC/recursive-engineering-platform/pull/7)
-- Exact PR head tested: `60e10aa129be85754cab2025580f7fed65bdf7a9`
-- GitHub Actions: [run #45733477038](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45733477038)
+- Integrated PR: [#9](https://github.com/Love-DC/recursive-engineering-platform/pull/9)
+- Candidate SHA: `d055fc1d6fbc7f83d83e35a43fefd6d89a90db43`
+- GitHub Actions: [run #45734761932 — success](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45734761932)
 
-T01/T02/T03/T21/T26 are not all complete as end-to-end architecture guarantees. The labels above name precisely the tested prototype slices.
+Schema-only partial results are not end-to-end protocol passes. The complete Stage 2–4 behavior remains outstanding.
