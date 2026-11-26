@@ -37,7 +37,7 @@ The session adapter capability manifest is `adapters/github-session-tools.json`.
 
 `aep_delivery/adapter.py` contains the contract parser and a deterministic Fake GitHub Provider. The fake can commit an external side effect and then drop the response; tests must query provider state before retrying. The database never calls GitHub and never treats its fence as revoking shared credentials. Stale merges are reconciled as actual external facts, marked stale, and invalidate affected old exact-HEAD evidence.
 
-The Stage 3 PostgreSQL 17.12 test runner is `scripts/test_stage3_delivery_protocol.py` and covers T12, T13, T14, T15, T21, and T22. Candidate [PR #49](https://github.com/Love-DC/recursive-engineering-platform/pull/49) HEAD `f2766ba9345bf6221618fc48db93e30f2a5db403` / tree `ce0336dfdd2576ab1176b7791722c9c1d5b54041` passed exact-head [Run #92](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45891410042). Independent review is pending; PR #49 remains Draft and unmerged.
+The Stage 3 PostgreSQL 17.12 test runner is `scripts/test_stage3_delivery_protocol.py` and covers T12, T13, T14, T15, T21, and T22. Candidate [PR #49](https://github.com/Love-DC/recursive-engineering-platform/pull/49) HEAD `1ee9407620e9c56b10bd675fada1076713de783b` / tree `6fd6db2ab26e9629e034d08dd371609b02482aac` passed exact-head [Run #96](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45891717134). Independent review is pending; PR #49 remains Draft and unmerged.
 
 ## What these tests do not prove
 
