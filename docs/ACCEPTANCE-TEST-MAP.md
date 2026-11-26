@@ -4,7 +4,7 @@ Authoritative behavioral definitions are in [Snapshot v2.0](https://github.com/L
 
 | ID | Required proof | Planned stage | Status |
 |---|---|---:|---|
-| T01 | Concurrent canonical registration yields one Work | 1A–2 | PASS — two independent PostgreSQL sessions are synchronized at a database advisory-lock rendezvous; the controller releases only after both are observed waiting, then one canonical Work is committed and linked. Exact integrated evidence: PR #9 HEAD `4b241ff7a9ae76db7780133e23f6ee1371344bf5`, tree `fbad3219ae197246e588a2d571e511b48c3233c9`, Run #32. |
+| T01 | Concurrent canonical registration yields one Work | 1A–2 | PASS — two independent PostgreSQL sessions are synchronized at a database advisory-lock rendezvous; the controller releases only after both are observed waiting, then one canonical Work is committed and linked. Exact integrated evidence: see the [canonical PR #9 exact-HEAD evidence record](https://github.com/Love-DC/recursive-engineering-platform/pull/9#issuecomment-7183275628), maintained in place as the candidate advances. |
 | T02 | Idempotency replay and payload conflict | 1A–2 | PASS — replay returns same work_id; changed payload with same key conflicts |
 | T03 | Lost registration response recovers without duplicate Work/ExternalRef | 1A–3 | PARTIAL — Work registration retry from a new session passed; external operation receipt reconciliation is not implemented |
 | T04 | Concurrent claim race yields one current execution | 2 | PARTIAL — one-active Execution unique index tested; atomic claim protocol and concurrent claim RPC not implemented |
@@ -33,11 +33,10 @@ Authoritative behavioral definitions are in [Snapshot v2.0](https://github.com/L
 
 ## Evidence history and current-candidate slot
 
-- Integrated PR: [#9](https://github.com/Love-DC/recursive-engineering-platform/pull/9) — open and unmerged. The bounded final integration acceptance returned CHANGES_REQUIRED only for stale evidence pointers in repository docs/tracking statuses ([report](https://github.com/Love-DC/recursive-engineering-platform/pull/9#issuecomment-7182929171)); this follow-up synchronizes them. This does not reopen the accepted database or architecture reviews.
+- Integrated PR: [#9](https://github.com/Love-DC/recursive-engineering-platform/pull/9) — open and unmerged. The bounded final integration acceptance returned CHANGES_REQUIRED only for stale duplicated evidence pointers ([report](https://github.com/Love-DC/recursive-engineering-platform/pull/9#issuecomment-7182929171)). The current exact-HEAD commit/tree and matching CI are pinned in the [canonical evidence record](https://github.com/Love-DC/recursive-engineering-platform/pull/9#issuecomment-7183275628); this stable pointer avoids repeated documentation churn. This does not reopen accepted database or architecture reviews.
 - Historical Run #24 ([45734761932](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45734761932)): success for old SHA `d055fc1d6fbc7f83d83e35a43fefd6d89a90db43`.
 - Historical Run #27 ([45735069544](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45735069544)): success for reviewed SHA `5648ce0de9e3d9bd6460645819d75bffb35dd772`.
 - These are historical run records, not evidence for the final post-remediation candidate.
-- **Final integrated candidate SHA:** `4b241ff7a9ae76db7780133e23f6ee1371344bf5` (tree `fbad3219ae197246e588a2d571e511b48c3233c9`).
-- **Matching exact-SHA GitHub Actions run:** [Run #32 — success](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45756670349). Repository contract validation and PostgreSQL 17.12 integration passed; T01 rendezvous was observed in the PostgreSQL log. Run #31 remains historical evidence for its earlier SHA.
+- **Current exact-HEAD commit/tree and matching Actions run:** recorded in the [canonical PR #9 evidence record](https://github.com/Love-DC/recursive-engineering-platform/pull/9#issuecomment-7183275628). The record is updated in place after candidate changes; historical Runs #24/#27/#31/#32 remain historical evidence only.
 
 Schema-only partial results are not end-to-end protocol passes. Successful CI is not acceptance. The complete architecture Stage 1 guarantees mapped to implementation Stage 2, and the later Stage 3–4 behavior, remain outstanding.

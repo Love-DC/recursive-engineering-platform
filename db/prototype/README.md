@@ -18,12 +18,12 @@ This directory contains a PostgreSQL experiment for Stage 1A/1B.
 
 ## Verification
 
-CI applies the ordered migrations to a clean PostgreSQL 17.12 database and exercises the prototype integration tests. PR [#9](https://github.com/Love-DC/recursive-engineering-platform/pull/9) remains open and unmerged. The bounded final integration acceptance returned CHANGES_REQUIRED solely for stale documentation evidence pointers ([report](https://github.com/Love-DC/recursive-engineering-platform/pull/9#issuecomment-7182929171)); this documentation follow-up synchronizes them. The underlying exact-HEAD CI passed.
+CI applies the ordered migrations to a clean PostgreSQL 17.12 database and exercises the prototype integration tests. PR [#9](https://github.com/Love-DC/recursive-engineering-platform/pull/9) remains open and unmerged. The bounded final integration acceptance returned CHANGES_REQUIRED solely for stale duplicated evidence pointers ([report](https://github.com/Love-DC/recursive-engineering-platform/pull/9#issuecomment-7182929171)). The current commit/tree, exact-HEAD CI run and test scope are maintained in the [canonical evidence record](https://github.com/Love-DC/recursive-engineering-platform/pull/9#issuecomment-7183275628), avoiding self-referential moving SHA/Run copies.
 
 Historical evidence (not final candidate evidence):
 - Run #24 ([45734761932](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45734761932)) passed for old SHA `d055fc1d6fbc7f83d83e35a43fefd6d89a90db43`.
 - Run #27 ([45735069544](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45735069544)) passed for review SHA `5648ce0de9e3d9bd6460645819d75bffb35dd772`.
-- Final integrated candidate: PR #9 HEAD `4b241ff7a9ae76db7780133e23f6ee1371344bf5` (tree `fbad3219ae197246e588a2d571e511b48c3233c9`); [Actions Run #32](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45756670349) passed on that exact SHA. PostgreSQL 17.12 reports T01 rendezvous success. The run uses a clean disposable database; it does not test populated-database upgrades. Run #31 is historical evidence for its earlier SHA.
+- Current integrated candidate evidence is pinned in the [canonical exact-HEAD evidence record](https://github.com/Love-DC/recursive-engineering-platform/pull/9#issuecomment-7183275628), which records the matching commit/tree, Actions run, PostgreSQL version, T01 rendezvous log and clean-disposable-database boundary. The test does not prove populated-database migration upgrades.
 
 See [the test harness](../../scripts/test_postgres_prototype.py).
 
