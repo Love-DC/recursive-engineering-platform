@@ -57,7 +57,7 @@ Authoritative behavioral definitions are in [Snapshot v2.0](https://github.com/L
 - **T12, T13, T14, T15, T21, and T22 are PASS for the tested disposable PostgreSQL 17.12 prototype scope.** Their row-level descriptions above reference this immutable candidate/review/merge/CI evidence.
 - Capability boundary remains explicit: Process Review `COMMENTED` is distinct from Native Approval `APPROVED`; an independently authenticated native-approver principal is unavailable under the connected single GitHub principal. Deployment is unsupported.
 - This lifecycle does not prove a production GitHub gateway, production Supabase deployment, production authorization/write path, pilot, legacy RAE migration/cutover, or unattended Worker/runtime. No existing Supabase or legacy RAE state was changed.
-- T06 remains PARTIAL. D4 remains PROVISIONAL. D9/D13/D15/D16 remain UNVERIFIED / OPEN. Stage 4 remains NOT STARTED; Stage 5 remains BLOCKED ON D13; Stage 6 remains BLOCKED ON OWNER DECISION.
+- T06 remains PARTIAL. D4 remains PROVISIONAL. D9/D13/D15/D16 remain UNVERIFIED / OPEN. Stage 4A fresh-session recovery is implemented as a disposable PostgreSQL prototype and remains under remediation/review; Stage 4B–4D remain open/not started. Stage 5 remains BLOCKED ON D13; Stage 6 remains BLOCKED ON OWNER DECISION.
 
 ## Stage 2A delivery status — merged and post-merge verified
 
@@ -85,7 +85,7 @@ Authoritative behavioral definitions are in [Snapshot v2.0](https://github.com/L
 ## Remaining acceptance gaps
 
 - T06 remains PARTIAL: repository/ref-level exclusion is implemented; path-overlap and narrower write-set locking are not.
-- T03/T12–T22/T24–T25 retain the PARTIAL or NOT IMPLEMENTED statuses above where external delivery reconciliation, authenticated production authorization, session recovery, discovery, and derived memory are not yet implemented.
+- T03/T16–T18/T24 retain the PARTIAL statuses above for their stated authorization, Owner-event, versioned handover, or broader end-to-end limitations. Stage 4A session recovery is implemented and tested only as a disposable PostgreSQL prototype; T19/T20 discovery and decomposition and T25 derived memory remain NOT IMPLEMENTED.
 - T16–T18 remain PARTIAL for their explicitly stated production/Owner-event and authenticated authorization limitations. Passing prototype RPC/RLS checks must not be represented as a production security audit.
 
 Schema-only partial results remain distinct from end-to-end passes. Successful CI is evidence for the exact tested prototype behavior, not automatic Owner acceptance of deferred decisions or production readiness.
