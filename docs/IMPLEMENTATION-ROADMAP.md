@@ -7,7 +7,7 @@ Stage 1B data model: [Issue #8](https://github.com/Love-DC/recursive-engineering
 
 ## Current state
 
-**Stage 0 — implementation delivered in PR #9; acceptance pending.** Repository governance, architecture/decision docs, session entry contract, and repository CI are present. The PR is open and unmerged; independent review remains pending.
+**Stage 0 — implementation delivered in PR #9; acceptance pending.** Repository governance, architecture/decision docs, session entry contract, and repository CI are present. The PR is open and unmerged; refreshed final independent acceptance remains pending.
 
 **Stage 1A — canonical Work registration implemented and tested in PR #9.** Active canonical identity uniqueness, request idempotency, ExternalRef uniqueness, append-only Work events, and the register-or-link transaction passed the named tests.
 
@@ -18,10 +18,11 @@ Stage 1B data model: [Issue #8](https://github.com/Love-DC/recursive-engineering
 - Run #24 ([45734761932](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45734761932)) passed for historical SHA `d055fc1d6fbc7f83d83e35a43fefd6d89a90db43`.
 - Run #27 ([45735069544](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45735069544)) passed for the review SHA `5648ce0de9e3d9bd6460645819d75bffb35dd772`.
 - Both runs are retained as historical evidence only. Neither identifies the final post-remediation candidate.
-- **Final integrated candidate SHA:** PENDING — record only after all PR #9 remediation PRs are merged.
-- **Final exact-SHA CI run:** PENDING — record only after CI completes against that final integrated candidate.
+- **Final integrated candidate SHA:** `de713207ebabcd20efe84df912f781985f6156fb`.
+- **Final exact-SHA CI run:** [Run #31 — success](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45756309441), with Repository contract validation and PostgreSQL 17.12 integration jobs both passing.
+- **T01:** PASS — PostgreSQL log states `two sessions reached a DB rendezvous before one canonical Work was committed`.
 
-PR #9 remains open and unmerged. Review findings are being remediated; successful historical CI is not acceptance.
+PR #9 remains open and unmerged. The prior review findings have been remediated in the integrated candidate; refreshed independent final acceptance remains pending. CI success is not Owner acceptance.
 
 ## Architecture-to-implementation stage crosswalk
 
