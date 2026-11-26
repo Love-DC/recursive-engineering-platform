@@ -679,6 +679,26 @@ def main() -> None:
         "INSERT INTO aep.resource_claims(project_id,resource_id,work_id,execution_id,resource_ref,write_set_kind,conflict_key,status,lease_until,fence) VALUES "
         f"({lit(project_id)}::uuid,{lit(resource_id)}::uuid,{lit(work_one)}::uuid,{lit(execution_one)}::uuid,'refs/heads/foo./bar','repository_ref','*','active',now()+interval '5 minutes',1);"
     )
+    # U+0085 is a non-ASCII Unicode character accepted by Git; it must not be
+    # rejected merely because the database locale classifies it as control-like.
+    psql(
+        "INSERT INTO aep.resource_claims(project_id,resource_id,work_id,execution_id,resource_ref,write_set_kind,conflict_key,status,lease_until,fence) VALUES "
+        f"({lit(project_id)}::uuid,{lit(resource_id)}::uuid,{lit(work_one)}::uuid,{lit(execution_one)}::uuid,{lit('refs/heads/foo\u0085bar')},'repository_ref','*','active',now()+interval '5 minutes',1);"
+    )
+    # Build ASCII control characters with chr() so the SQL test source remains
+    # printable while exercising the INSERT trigger boundary.
+    expect_constraint(
+        "INSERT INTO aep.resource_claims(project_id,resource_id,work_id,execution_id,resource_ref,write_set_kind,conflict_key,status,lease_until,fence) "
+        f"VALUES({lit(project2)}::uuid,{lit(resource_id)}::uuid,{lit(work_two)}::uuid,{lit(execution_two)}::uuid,'refs/heads/ascii-' || chr(1) || '-control','repository_ref','*','active',now()+interval '5 minutes',1);",
+        "resource_claims_github_branch_ref_canonical_ck",
+        "ASCII C0 control U+0001 is rejected by the ResourceClaim INSERT trigger",
+    )
+    expect_constraint(
+        "INSERT INTO aep.resource_claims(project_id,resource_id,work_id,execution_id,resource_ref,write_set_kind,conflict_key,status,lease_until,fence) "
+        f"VALUES({lit(project2)}::uuid,{lit(resource_id)}::uuid,{lit(work_two)}::uuid,{lit(execution_two)}::uuid,'refs/heads/ascii-' || chr(127) || '-del','repository_ref','*','active',now()+interval '5 minutes',1);",
+        "resource_claims_github_branch_ref_canonical_ck",
+        "ASCII DEL U+007F is rejected by the ResourceClaim INSERT trigger",
+    )
     expect_constraint(
         "INSERT INTO aep.resource_claims(project_id,resource_id,work_id,execution_id,resource_ref,write_set_kind,conflict_key,status,lease_until,fence) "
         f"VALUES({lit(project2)}::uuid,{lit(resource_id)}::uuid,{lit(work_two)}::uuid,{lit(execution_two)}::uuid,'refs/heads/foo.','repository_ref','*','active',now()+interval '5 minutes',1);",
