@@ -109,22 +109,40 @@ def add_requirement(project_id: str, work_id: str, resource_id: str, ref: str) -
 
 def project_dependency_graph(project_id: str, *, graph_scope: str = "project",
                              graph_status: str = "active") -> str:
+    if graph_scope == "project" and graph_status == "active":
+        return scalar(
+            "SELECT graph_id::text FROM aep.dependency_graphs "
+            f"WHERE owner_project_id={lit(project_id)}::uuid AND is_default;"
+        )
+    if graph_scope == "shared" and graph_status == "active":
+        return scalar(f"SELECT aep.create_dependency_graph({lit(project_id)}::uuid);")
     graph_id = scalar(
-        "INSERT INTO aep.dependency_graphs(graph_scope,owner_project_id,status) VALUES("
-        f"{lit(graph_scope)},{lit(project_id)}::uuid,{lit(graph_status)}) RETURNING graph_id;"
+        "INSERT INTO aep.dependency_graphs(graph_scope,owner_project_id,status,is_default) VALUES("
+        f"{lit(graph_scope)},{lit(project_id)}::uuid,{lit(graph_status)},false) RETURNING graph_id;"
     )
     psql(
-        "INSERT INTO aep.dependency_graph_members(graph_id,project_id,access_mode) VALUES("
-        f"{lit(graph_id)}::uuid,{lit(project_id)}::uuid,'owner');"
+        "INSERT INTO aep.dependency_graph_members(graph_id,project_id,access_mode,member_status) VALUES("
+        f"{lit(graph_id)}::uuid,{lit(project_id)}::uuid,'owner','active');"
     )
     return graph_id
 
 
-def add_dependency(source_work: str, prerequisite_work: str, graph_id: str) -> None:
-    psql(
-        "INSERT INTO aep.work_relations(source_work_id,target_work_id,relation_type,dependency_graph_id) VALUES("
-        f"{lit(source_work)}::uuid,{lit(prerequisite_work)}::uuid,'depends_on',{lit(graph_id)}::uuid);"
+def dependency_mutation_sql(source_work: str, prerequisite_work: str, graph_id: str,
+                            *, request_key: str | None = None, operation: str = "add") -> str:
+    key = request_key or str(uuid4())
+    return (
+        "SELECT aep.mutate_dependencies("
+        f"{lit(graph_id)}::uuid,{lit(key)},"
+        "jsonb_build_array(jsonb_build_object("
+        f"'op',{lit(operation)},"
+        f"'source_work_id',{lit(source_work)},"
+        f"'target_work_id',{lit(prerequisite_work)}"
+        ")));"
     )
+
+
+def add_dependency(source_work: str, prerequisite_work: str, graph_id: str) -> None:
+    psql(dependency_mutation_sql(source_work, prerequisite_work, graph_id))
 
 
 def claim_sql(work_id: str, session_id: str, seconds: int) -> str:
@@ -375,8 +393,8 @@ def main() -> None:
         if not match:
             raise SystemExit(f"Invalid migration filename: {path.name}")
         versions.append(int(match.group(1)))
-    if versions != list(range(1, len(versions) + 1)) or versions[-1] != 5:
-        raise SystemExit(f"Expected contiguous migrations 0001..0005, got {versions}")
+    if versions != list(range(1, len(versions) + 1)) or versions[-1] != 6:
+        raise SystemExit(f"Expected contiguous migrations 0001..0006, got {versions}")
 
     psql("DROP DATABASE IF EXISTS aep_stage2a_test WITH (FORCE);", db="postgres")
     psql("CREATE DATABASE aep_stage2a_test;", db="postgres")
@@ -386,7 +404,7 @@ def main() -> None:
     print(f"INFO Stage 2A disposable database: PostgreSQL {version}")
     for path in migration_paths:
         psql(file=path)
-    print("PASS T26: clean ordered migration chain 0001-0005 applied on PostgreSQL 17.12")
+    print("PASS T26: clean ordered migration chain 0001-0006 applied on PostgreSQL 17.12")
 
     project_a = scalar(
         "INSERT INTO aep.projects(project_key,name) VALUES('stage2a-a','Stage 2A A') RETURNING project_id;"
@@ -435,10 +453,11 @@ def main() -> None:
         "SELECT status || '|' || COALESCE(current_execution_id::text,'null') "
         "|| '|' || fence_generation::text || '|' || "
         "(SELECT count(*)::text FROM aep.executions WHERE work_id=works.work_id) "
+        "|| '|' || dependency_blocked::text "
         f"FROM aep.works WHERE work_id={lit(dependency_dependent)}::uuid;"
     )
-    if dependency_blocked_state != "ready|null|0|0":
-        raise AssertionError(f"incomplete prerequisite left partial claim state: {dependency_blocked_state}")
+    if dependency_blocked_state != "blocked|null|0|0|true":
+        raise AssertionError(f"incomplete prerequisite did not atomically invalidate READY: {dependency_blocked_state}")
 
     prerequisite_claim = parse_claim(psql(claim_sql(dependency_prerequisite, str(uuid4()), 60)))
     prerequisite_finished = scalar(
@@ -458,31 +477,30 @@ def main() -> None:
         raise AssertionError(f"Work with a completed prerequisite could not be claimed: {dependent_finished}")
 
     shared_graph = project_dependency_graph(project_a, graph_scope="shared")
-    shared_dependent = ready_work(project_a, "shared-graph-dependency-rejected")
+    shared_dependent = ready_work(project_a, "shared-graph-dependency-eligible")
     add_dependency(shared_dependent, dependency_prerequisite, shared_graph)
-    expect_error(
-        claim_sql(shared_dependent, str(uuid4()), 60),
-        "inactive/unauthorized dependency graph",
-        "claim through unsupported shared dependency graph",
+    shared_claim = parse_claim(psql(claim_sql(shared_dependent, str(uuid4()), 60)))
+    shared_finished = scalar(
+        "SELECT work_status FROM aep.finish_execution("
+        f"{lit(shared_dependent)}::uuid,{lit(shared_claim[0])}::uuid,"
+        f"{shared_claim[2]},{shared_claim[4]},'succeeded','{{}}'::jsonb);"
     )
+    if shared_finished != "delivered":
+        raise AssertionError(f"authorized shared graph dependency did not complete: {shared_finished}")
+
     archived_graph = project_dependency_graph(project_a, graph_status="archived")
     archived_dependent = ready_work(project_a, "archived-graph-dependency-rejected")
-    add_dependency(archived_dependent, dependency_prerequisite, archived_graph)
     expect_error(
-        claim_sql(archived_dependent, str(uuid4()), 60),
-        "inactive/unauthorized dependency graph",
-        "claim through archived dependency graph",
+        dependency_mutation_sql(archived_dependent, dependency_prerequisite, archived_graph),
+        "Dependency graph is not active",
+        "dependency mutation through archived graph",
     )
-    for blocked_work in (shared_dependent, archived_dependent):
-        blocked_state = scalar(
-            "SELECT status || '|' || COALESCE(current_execution_id::text,'null') "
-            "|| '|' || fence_generation::text || '|' || "
-            "(SELECT count(*)::text FROM aep.executions WHERE work_id=works.work_id) "
-            f"FROM aep.works WHERE work_id={lit(blocked_work)}::uuid;"
-        )
-        if blocked_state != "ready|null|0|0":
-            raise AssertionError(f"unauthorized/inactive dependency graph left partial claim state: {blocked_state}")
-    print("PASS dependency eligibility: incomplete prerequisites and inactive/shared graphs fail closed; completed prerequisites permit claim")
+    if scalar(
+        "SELECT count(*) FROM aep.work_relations "
+        f"WHERE source_work_id={lit(archived_dependent)}::uuid AND status='active';"
+    ) != "0":
+        raise AssertionError("archived graph mutation left an active dependency edge")
+    print("PASS dependency eligibility: READY invalidates and recovers; completed prerequisites and authorized shared graphs permit claim; archived graph mutation fails")
 
     # A renewal and takeover both queue behind a Work-row lock. Before the lease
     # expiry, the renewal may extend it but the takeover must never steal it.
@@ -894,10 +912,13 @@ def main() -> None:
       WHERE ns.nspname='aep' AND proc.prosecdef;
     """)
     expected_security_inventory = (
-        "9|9|claim_work,finish_execution,guard_approved_grant_decision_mutation,"
+        "16|16|attach_work_dependency_graph_memberships,claim_work,"
+        "create_dependency_graph,create_project_default_dependency_graph,"
+        "finish_execution,guard_approved_grant_decision_mutation,"
         "guard_project_resource_write_grant,guard_resource_archive,"
-        "guard_work_resource_requirement,register_work,renew_execution,"
-        "set_work_resource_requirements"
+        "guard_work_resource_requirement,mutate_dependencies,register_work,"
+        "renew_execution,set_dependency_graph_member,set_work_ready,"
+        "set_work_resource_requirements,sync_dependency_graph_member_works"
     )
     if security_inventory != expected_security_inventory:
         raise AssertionError(
@@ -910,6 +931,10 @@ def main() -> None:
         || '|' || has_function_privilege('aep_runtime','aep.claim_work(uuid,uuid,integer)','EXECUTE')::text
         || '|' || has_function_privilege('aep_runtime','aep.renew_execution(uuid,uuid,bigint,bigint,integer)','EXECUTE')::text
         || '|' || has_function_privilege('aep_runtime','aep.finish_execution(uuid,uuid,bigint,bigint,text,jsonb)','EXECUTE')::text
+        || '|' || has_function_privilege('aep_runtime','aep.create_dependency_graph(uuid)','EXECUTE')::text
+        || '|' || has_function_privilege('aep_runtime','aep.set_dependency_graph_member(uuid,uuid,text,uuid)','EXECUTE')::text
+        || '|' || has_function_privilege('aep_runtime','aep.mutate_dependencies(uuid,text,jsonb)','EXECUTE')::text
+        || '|' || has_function_privilege('aep_runtime','aep.set_work_ready(uuid)','EXECUTE')::text
         || '|' || has_function_privilege('aep_runtime','aep.guard_work_resource_requirement()','EXECUTE')::text
         || '|' || has_function_privilege('aep_runtime','aep.guard_project_resource_write_grant()','EXECUTE')::text
         || '|' || has_function_privilege('aep_runtime','aep.guard_approved_grant_decision_mutation()','EXECUTE')::text
@@ -917,6 +942,8 @@ def main() -> None:
         || '|' || has_table_privilege('aep_runtime','aep.work_resource_requirements','SELECT')::text
         || '|' || has_table_privilege('aep_runtime','aep.executions','SELECT')::text
         || '|' || has_table_privilege('aep_runtime','aep.resource_claims','SELECT')::text
+        || '|' || has_table_privilege('aep_runtime','aep.dependency_graph_works','SELECT')::text
+        || '|' || has_table_privilege('aep_runtime','aep.dependency_graph_operations','SELECT')::text
         || '|' || (
           SELECT bool_and(relrowsecurity AND relforcerowsecurity)::text
           FROM pg_class
@@ -924,11 +951,13 @@ def main() -> None:
             'aep.work_resource_requirements'::regclass,
             'aep.works'::regclass,
             'aep.executions'::regclass,
-            'aep.resource_claims'::regclass
+            'aep.resource_claims'::regclass,
+            'aep.dependency_graph_works'::regclass,
+            'aep.dependency_graph_operations'::regclass
           )
         );
     """)
-    if runtime_grants != "true|true|true|true|false|false|false|false|false|false|false|true":
+    if runtime_grants != "true|true|true|true|true|true|true|true|false|false|false|false|false|false|false|false|false|true":
         raise AssertionError(f"Runtime grants/RLS boundary failed: {runtime_grants}")
     runtime_work = ready_work(project_a, "runtime-rpc-only")
     runtime_requirement_count = scalar(
