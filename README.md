@@ -4,12 +4,12 @@ A cross-project AI engineering coordination platform designed around a canonical
 
 ## Current status
 
-- Architecture baseline: v2.0 accepted by the Owner on 2026-11-26.
-- Stage 0 foundation, Stage 1A canonical Work registration, and Stage 1B minimum coordination data model are implemented in candidate [PR #9](https://github.com/Love-DC/recursive-engineering-platform/pull/9).
-- Candidate head: `d055fc1d6fbc7f83d83e35a43fefd6d89a90db43`.
-- [GitHub Actions run #24](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45734761932) passed against that exact SHA using an ephemeral PostgreSQL 17.12 database.
-- PR #9 is open and unmerged. Independent review and merge are pending.
-- Atomic claim/lease/fencing behavior, dependency DAG concurrency, production authorization, GitHub delivery/reconciliation, session recovery, discovery, and production integration are not implemented.
+- **Architecture authority:** Current Design Snapshot v2.0 was accepted by the Owner as the overall architecture baseline on 2026-11-26. The durable provenance record is the coordinator's [Issue #1 acceptance reconciliation comment](https://github.com/Love-DC/recursive-engineering-platform/issues/1#issuecomment-7180060029). It records the Owner's direct confirmation in the ChatGPT conversation; it does not claim that the earlier Snapshot comment was authored by the Owner. D4 remains PROVISIONAL; D9, D13, D15, and D16 remain UNVERIFIED / OPEN.
+- **Implementation candidate:** Stage 0 foundation, Stage 1A registration, and Stage 1B coordination data structures are integrated in [PR #9](https://github.com/Love-DC/recursive-engineering-platform/pull/9). The reviewed database and documentation findings have been remediated in the current candidate. PR #9 remains open and unmerged pending refreshed final independent acceptance; green CI is not Owner acceptance.
+- **Reviewed baseline at remediation start:** PR #9 HEAD was `5648ce0de9e3d9bd6460645819d75bffb35dd772`. This is a historical review target, not the final post-remediation candidate.
+- **Historical CI evidence (not final candidate evidence):** Run #24 ([45734761932](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45734761932)) passed for old SHA `d055fc1d6fbc7f83d83e35a43fefd6d89a90db43`. Run #27 ([45735069544](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45735069544)) passed for review SHA `5648ce0de9e3d9bd6460645819d75bffb35dd772`. Neither is the final post-remediation candidate.
+- **Final post-remediation evidence:** PR #9 HEAD `de713207ebabcd20efe84df912f781985f6156fb`; [Actions run #31](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45756309441) passed Repository contract validation and PostgreSQL 17.12 integration against that exact SHA. T01's log confirms both sessions reached the database rendezvous before one canonical Work was committed. PR #9 remains open and unmerged pending refreshed independent final acceptance.
+- **Stage mapping:** Implementation Stages 1A/1B are preparatory slices of Architecture Snapshot Stage 1, not completion of it. Atomic claim/resource reservation, lease/fencing, stale-write rejection, and project authorization remain outstanding in implementation Stage 2.
 
 ## Start here
 
@@ -18,6 +18,8 @@ A cross-project AI engineering coordination platform designed around a canonical
 - [Stage 1B coordination data model](https://github.com/Love-DC/recursive-engineering-platform/issues/8)
 - [Integrated Stage 0–1B PR](https://github.com/Love-DC/recursive-engineering-platform/pull/9)
 - [Accepted architecture baseline](https://github.com/Love-DC/recursive-engineering-platform/issues/1#issuecomment-7161657103)
+- [Owner acceptance provenance record](https://github.com/Love-DC/recursive-engineering-platform/issues/1#issuecomment-7180060029)
+- [PR #9 documentation remediation](https://github.com/Love-DC/recursive-engineering-platform/issues/13)
 
 ## Prototype safety boundary
 

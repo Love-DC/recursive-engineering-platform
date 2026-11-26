@@ -7,14 +7,33 @@ Stage 1B data model: [Issue #8](https://github.com/Love-DC/recursive-engineering
 
 ## Current state
 
-**Stage 0 — implementation delivered in PR #9; acceptance pending.** Repository governance, architecture/decision docs, session entry contract, and repository CI are present. The PR is open and unmerged; independent review remains pending.
+**Stage 0 — implementation delivered in PR #9; acceptance pending.** Repository governance, architecture/decision docs, session entry contract, and repository CI are present. The PR is open and unmerged; refreshed final independent acceptance remains pending.
 
 **Stage 1A — canonical Work registration implemented and tested in PR #9.** Active canonical identity uniqueness, request idempotency, ExternalRef uniqueness, append-only Work events, and the register-or-link transaction passed the named tests.
 
-**Stage 1B — minimum coordination data model implemented and schema-tested in PR #9.** Physical Resource / ProjectResource, Execution, ResourceClaim, dependency graph descriptors/membership, typed WorkRelations, OwnerDecision provenance, Evidence, and OperationReceipt/event records are present as additive migration 0002. Tests validate declared foreign keys, unique indexes, RLS table ownership, and selected integrity constraints. This does not implement the Stage 2 transaction protocols.
+**Stage 1B — minimum coordination data model implemented and schema-tested in PR #9.** Physical Resource / ProjectResource, Execution, ResourceClaim, dependency graph descriptors/membership, typed WorkRelations, OwnerDecision provenance, Evidence, and OperationReceipt/event records are present as additive migration 0002. CI validates selected foreign-key behaviors, unique-index behavior, RLS table ownership, and selected integrity constraints; schema presence does not mean every composite foreign key has been independently exercised. This does not implement the Stage 2 transaction protocols.
 
-Candidate SHA: `d055fc1d6fbc7f83d83e35a43fefd6d89a90db43`  
-Exact-SHA CI: [run #45734761932 — success](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45734761932)
+### Historical CI evidence — not final candidate evidence
+
+- Run #24 ([45734761932](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45734761932)) passed for historical SHA `d055fc1d6fbc7f83d83e35a43fefd6d89a90db43`.
+- Run #27 ([45735069544](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45735069544)) passed for the review SHA `5648ce0de9e3d9bd6460645819d75bffb35dd772`.
+- Both runs are retained as historical evidence only. Neither identifies the final post-remediation candidate.
+- **Final integrated candidate SHA:** `de713207ebabcd20efe84df912f781985f6156fb`.
+- **Final exact-SHA CI run:** [Run #31 — success](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45756309441), with Repository contract validation and PostgreSQL 17.12 integration jobs both passing.
+- **T01:** PASS — PostgreSQL log states `two sessions reached a DB rendezvous before one canonical Work was committed`.
+
+PR #9 remains open and unmerged. The prior review findings have been remediated in the integrated candidate; refreshed independent final acceptance remains pending. CI success is not Owner acceptance.
+
+## Architecture-to-implementation stage crosswalk
+
+The stage numbers describe two different planning views and must not be read as a one-to-one renumbering:
+
+| Architecture Snapshot v2.0 | Implementation roadmap | Mapping |
+|---|---|---|
+| Stage 1 — Work registration and coordination, including the required atomic coordination and authorization guarantees | Stages 1A and 1B | Preparatory implementation slices: canonical Work registration and the minimum coordination data model. These slices do not complete architecture Stage 1. |
+| Remaining architecture Stage 1 guarantees | Implementation Stage 2 | Still to implement and verify: atomic claim and resource reservation, lease/takeover and monotonic fencing, stale-write rejection, and project authorization. |
+
+Implementation Stage 2 also contains the dependency mutation and DAG safety protocols specified by the accepted baseline. Architecture stage definitions remain unchanged.
 
 ## Stages and gates
 
