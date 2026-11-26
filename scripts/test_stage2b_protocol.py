@@ -68,7 +68,7 @@ def register_work(project_id: str, identity: str, title: str | None = None) -> s
         "SELECT work_id::text FROM aep.register_work("
         f"{lit(project_id)}::uuid,{lit(str(uuid4()))},{lit(str(uuid4()))}::uuid,"
         f"'stage2b',{lit(identity)},1,'implementation',"
-        f"{lit(title or identity)},'{}'::jsonb,NULL);"
+        f"{lit(title or identity)},'{{}}'::jsonb,NULL);"
     )
 
 
