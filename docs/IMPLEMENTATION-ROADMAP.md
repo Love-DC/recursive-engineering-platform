@@ -7,7 +7,7 @@ Stage 1B data model: [Issue #8](https://github.com/Love-DC/recursive-engineering
 
 ## Current state
 
-**Stage 0 — implementation delivered in PR #9; exact-HEAD CI verified.** Repository governance, architecture/decision docs, session entry contract, and repository CI are present. PR #9 remains open and unmerged because the bounded final integration acceptance returned CHANGES_REQUIRED solely for stale documentation evidence pointers; this follow-up synchronizes those records. No Owner acceptance is implied.
+**Stage 0 — implementation delivered in PR #9; exact-HEAD CI verification is tracked.** Repository governance, architecture/decision docs, session entry contract, and repository CI are present. PR #9 remains open and unmerged because the bounded final integration acceptance returned CHANGES_REQUIRED solely for duplicated, stale SHA/Run references; this follow-up replaces those moving values with the stable [canonical evidence record](https://github.com/Love-DC/recursive-engineering-platform/pull/9#issuecomment-7183275628). No Owner acceptance is implied.
 
 **Stage 1A — canonical Work registration implemented and tested in PR #9.** Active canonical identity uniqueness, request idempotency, ExternalRef uniqueness, append-only Work events, and the register-or-link transaction passed the named tests.
 
@@ -18,11 +18,10 @@ Stage 1B data model: [Issue #8](https://github.com/Love-DC/recursive-engineering
 - Run #24 ([45734761932](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45734761932)) passed for historical SHA `d055fc1d6fbc7f83d83e35a43fefd6d89a90db43`.
 - Run #27 ([45735069544](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45735069544)) passed for the review SHA `5648ce0de9e3d9bd6460645819d75bffb35dd772`.
 - Both runs are retained as historical evidence only. Neither identifies the final post-remediation candidate.
-- **Final integrated candidate SHA:** `4b241ff7a9ae76db7780133e23f6ee1371344bf5` (tree `fbad3219ae197246e588a2d571e511b48c3233c9`).
-- **Final exact-SHA CI run:** [Run #32 — success](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45756670349), with Repository contract validation and PostgreSQL 17.12 integration jobs both passing. Run #31 is historical for its earlier SHA.
-- **T01:** PASS — PostgreSQL log states `two sessions reached a DB rendezvous before one canonical Work was committed`.
+- **Current exact-HEAD commit/tree and matching Actions run:** maintained in the [canonical PR #9 evidence record](https://github.com/Love-DC/recursive-engineering-platform/pull/9#issuecomment-7183275628).
+- **T01:** PASS for the tested Stage 1A concurrency slice; the exact PostgreSQL rendezvous log and corresponding run are recorded in the canonical evidence record. This is not the complete architecture coordination guarantee.
 
-PR #9 remains open and unmerged. The bounded final integration acceptance returned CHANGES_REQUIRED solely because the repository evidence pointers were stale; this follow-up synchronizes the affected records. CI success is not Owner acceptance, and no production readiness is claimed.
+PR #9 remains open and unmerged. The bounded final integration acceptance returned CHANGES_REQUIRED solely because repository documents duplicated moving exact-HEAD SHA/Run values. The canonical [evidence record](https://github.com/Love-DC/recursive-engineering-platform/pull/9#issuecomment-7183275628) is now the single maintained pointer. CI success is not Owner acceptance, and no production readiness is claimed.
 
 ## Architecture-to-implementation stage crosswalk
 
