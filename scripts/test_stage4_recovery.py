@@ -75,7 +75,7 @@ def setup_database() -> None:
     print("PASS T26: clean migrations 0001..0009 on PostgreSQL 17.12")
 
 
-def setup_project(manifest: dict) -> tuple[str, str, str, str, str]:
+def setup_project(manifest: dict) -> tuple[str, str, str, str, str, str]:
     project_id = scalar(
         "INSERT INTO aep.projects(project_key,name) "
         "VALUES('stage4-recovery-' || substr(gen_random_uuid()::text,1,8),"
@@ -139,7 +139,7 @@ def setup_project(manifest: dict) -> tuple[str, str, str, str, str]:
         "'Test-only recovery observation decision',1,'proposed'"
         ") RETURNING decision_id;"
     )
-    return project_id, resource_id, repository_id, read_resource_id, decision_id
+    return project_id, resource_id, repository_id, read_resource_id, decision_id, observation_decision_id
 
 
 def create_running_work(project_id: str, session_id: str) -> tuple[str, str, int]:
@@ -205,7 +205,7 @@ def recover(
 
 def test_recovery_without_prior_session_context(
     project_id: str, resource_id: str, repository_id: str,
-    read_resource_id: str, owner_decision_id: str, manifest: dict,
+    read_resource_id: str, owner_decision_id: str, observation_decision_id: str, manifest: dict,
 ) -> tuple[str, str, int, str, str, str]:
     session_a = str(uuid4())
     session_b = str(uuid4())
@@ -362,6 +362,10 @@ def test_recovery_without_prior_session_context(
                and row["status"] == "approved"
                for row in snapshot["owner_decisions"]):
         raise AssertionError("T10 approved OwnerDecision version/provenance was not recovered")
+    if not any(row["decision_id"] == observation_decision_id
+               and row["decision_version"] == 1 and row["status"] == "proposed"
+               for row in snapshot["owner_decisions"]):
+        raise AssertionError("T10 proposed OwnerDecision version was not recovered")
     if not any(row["resource_id"] == resource_id
                and row["adapter_key"] == "github-session-tools"
                and row["schema_version"] == 1
@@ -504,9 +508,22 @@ def test_expiry_takeover_and_stale_checkpoint(
         raise AssertionError("recovery must remain conservative for the current session too")
     if not any(row["execution_id"] == execution_a for row in snapshot["deliveries"]):
         raise AssertionError("takeover discarded the prior per-execution delivery record")
+    if not any(row["execution_id"] == execution_b
+               and row["pull_request_number"] == 708 and row["pr_head_sha"] == pr_sha_b
+               for row in snapshot["deliveries"]):
+        raise AssertionError("recovery did not include the new attempt's delivery identity and exact PR head")
+    if not any(row["execution_id"] == execution_b and row["subject_sha"] == pr_sha_b
+               and row["evidence_kind"] == "ci" and row["is_valid"]
+               for row in snapshot["delivery_evidence"]):
+        raise AssertionError("recovery did not include the new attempt's exact-SHA delivery evidence")
     if not any(row["execution_id"] == execution_a and row["status"] == "uncertain"
                for row in snapshot["operation_receipts"]):
         raise AssertionError("takeover discarded an ambiguous old-execution receipt")
+    if not any(row["operation_receipt_id"] == receipt_b
+               and row["execution_id"] == execution_b and row["status"] == "uncertain"
+               and row["reconciliation_status"] == "pending"
+               for row in snapshot["operation_receipts"]):
+        raise AssertionError("recovery did not include the new attempt's ambiguous operation receipt")
     bounded_snapshot = recover(project_id, str(uuid4()), work_limit=100, related_limit=1)
     bounded_collections = (
         "dependencies", "executions", "work_events", "evidence", "deliveries",
@@ -559,9 +576,11 @@ def test_authorization_gate_and_limits(project_id: str) -> None:
 def main() -> None:
     manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
     setup_database()
-    project_id, resource_id, repository_id, read_resource_id, owner_decision_id = setup_project(manifest)
+    (project_id, resource_id, repository_id, read_resource_id,
+     owner_decision_id, observation_decision_id) = setup_project(manifest)
     work_id, execution_a, fence_a, session_a, _session_b, receipt_id = test_recovery_without_prior_session_context(
-        project_id, resource_id, repository_id, read_resource_id, owner_decision_id, manifest
+        project_id, resource_id, repository_id, read_resource_id,
+        owner_decision_id, observation_decision_id, manifest
     )
     test_expiry_takeover_and_stale_checkpoint(
         project_id, work_id, execution_a, fence_a, session_a,
