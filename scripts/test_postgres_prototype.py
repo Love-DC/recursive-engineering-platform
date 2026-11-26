@@ -654,6 +654,21 @@ def main() -> None:
         raise AssertionError("More than one active Execution was not rejected by its partial unique index")
     print("PASS Stage 1B: per-Work attempt/fence uniqueness independently tested outside the active index")
 
+    other_provider_resource = scalar(
+        "INSERT INTO aep.resources(provider,host,resource_type,stable_resource_id,canonical_key) "
+        "VALUES('gitlab','gitlab.com','repository','project-42','repository:project-42') "
+        "RETURNING resource_id;"
+    )
+    psql(
+        "INSERT INTO aep.project_resources(project_id,resource_id,access_mode) "
+        f"VALUES({lit(project_id)}::uuid,{lit(other_provider_resource)}::uuid,'read');"
+    )
+    expect_constraint(
+        "INSERT INTO aep.resource_claims(project_id,resource_id,work_id,execution_id,resource_ref,write_set_kind,conflict_key,status,lease_until,fence) "
+        f"VALUES({lit(project_id)}::uuid,{lit(other_provider_resource)}::uuid,{lit(work_one)}::uuid,{lit(execution_one)}::uuid,'refs/heads/main','repository_ref','*','reserved',now()+interval '5 minutes',1);",
+        "resource_claims_repository_ref_provider_supported_ck",
+        "Unspecified provider ref contracts fail closed rather than using Git normalization",
+    )
     psql(
         "INSERT INTO aep.resource_claims(project_id,resource_id,work_id,execution_id,resource_ref,write_set_kind,conflict_key,status,lease_until,fence) VALUES "
         f"({lit(project_id)}::uuid,{lit(resource_id)}::uuid,{lit(work_one)}::uuid,{lit(execution_one)}::uuid,'refs/heads/main','repository_ref','*','active',now()+interval '5 minutes',1);"
@@ -678,6 +693,12 @@ def main() -> None:
         f"VALUES({lit(project2)}::uuid,{lit(resource_id)}::uuid,{lit(work_two)}::uuid,{lit(execution_two)}::uuid,'refs/remotes/origin/HEAD','repository_ref','*','active',now()+interval '5 minutes',1);",
         "resource_claims_github_branch_ref_canonical_ck",
         "Git remote symbolic HEAD alias is rejected",
+    )
+    expect_constraint(
+        "INSERT INTO aep.resource_claims(project_id,resource_id,work_id,execution_id,resource_ref,write_set_kind,conflict_key,status,lease_until,fence) "
+        f"VALUES({lit(project2)}::uuid,{lit(resource_id)}::uuid,{lit(work_two)}::uuid,{lit(execution_two)}::uuid,'refs/heads/feature..invalid','repository_ref','*','active',now()+interval '5 minutes',1);",
+        "resource_claims_github_branch_ref_canonical_ck",
+        "Malformed fully-qualified Git refs are rejected",
     )
     if scalar(
         "SELECT count(*) FROM aep.resource_claims "

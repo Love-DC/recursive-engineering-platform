@@ -39,8 +39,11 @@ ALTER FUNCTION aep.is_canonical_github_branch_ref(text) OWNER TO aep_owner;
 REVOKE ALL ON FUNCTION aep.is_canonical_github_branch_ref(text) FROM PUBLIC, aep_runtime;
 
 -- The current prototype has a defined ref contract only for GitHub repositories.
--- Validate existing live reservations before enabling the guard. Inactive
--- historical rows are retained without rewriting; any later update is guarded.
+-- Validate existing live reservations before enabling the guard. Lock both
+-- identity tables so no writer can slip an unvalidated live claim between the
+-- preflight and trigger installation. Inactive historical rows remain untouched.
+LOCK TABLE aep.resources, aep.resource_claims IN SHARE ROW EXCLUSIVE MODE;
+
 DO $preflight$
 BEGIN
   IF EXISTS (
