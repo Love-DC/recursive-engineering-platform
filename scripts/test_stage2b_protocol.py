@@ -43,8 +43,8 @@ def lit(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
-def scalar(sql: str) -> str:
-    return psql(sql).stdout.strip()
+def scalar(sql: str, *, db: str = DATABASE) -> str:
+    return psql(sql, db=db).stdout.strip()
 
 
 def expect_error(sql: str, needle: str, label: str) -> None:
@@ -56,19 +56,22 @@ def expect_error(sql: str, needle: str, label: str) -> None:
         )
 
 
-def create_project(name: str) -> str:
+def create_project(name: str, *, db: str = DATABASE) -> str:
     return scalar(
         "INSERT INTO aep.projects(project_key,name) VALUES("
-        f"{lit(name)},{lit(name)}) RETURNING project_id;"
+        f"{lit(name)},{lit(name)}) RETURNING project_id;",
+        db=db,
     )
 
 
-def register_work(project_id: str, identity: str, title: str | None = None) -> str:
+def register_work(project_id: str, identity: str, title: str | None = None,
+                   *, db: str = DATABASE) -> str:
     return scalar(
         "SELECT work_id::text FROM aep.register_work("
         f"{lit(project_id)}::uuid,{lit(str(uuid4()))},{lit(str(uuid4()))}::uuid,"
         f"'stage2b',{lit(identity)},1,'implementation',"
-        f"{lit(title or identity)},'{{}}'::jsonb,NULL);"
+        f"{lit(title or identity)},'{{}}'::jsonb,NULL);",
+        db=db,
     )
 
 
@@ -89,12 +92,14 @@ def graph_for(project_id: str) -> str:
     )
 
 
-def owner_decision(project_id: str, graph_id: str, access: str, suffix: str = "") -> str:
+def owner_decision(project_id: str, graph_id: str, access: str, suffix: str = "",
+                    *, db: str = DATABASE) -> str:
     key = "dependency_graph:" + graph_id + ":" + access
     version = scalar(
         "SELECT (COALESCE(max(decision_version),0)+1)::text "
         "FROM aep.owner_decisions WHERE scope_type='project' "
-        f"AND scope_key={lit(project_id)} AND decision_key={lit(key)};"
+        f"AND scope_key={lit(project_id)} AND decision_key={lit(key)};",
+        db=db,
     )
     return scalar(
         "INSERT INTO aep.owner_decisions("
@@ -106,8 +111,145 @@ def owner_decision(project_id: str, graph_id: str, access: str, suffix: str = ""
         f"{lit('Approved '+access+' access '+suffix)},{version},'approved',"
         "'direct_owner_message','test://owner/aep-stage2b','test-owner',"
         "jsonb_build_object('direct_owner_confirmation',true),clock_timestamp()"
-        ") RETURNING decision_id;"
+        ") RETURNING decision_id;",
+        db=db,
     )
+
+
+
+def test_populated_legacy_upgrade(migration_paths: list[Path]) -> None:
+    """Upgrade a schema-valid 0001-0005 database containing legacy graph members."""
+    upgrade_db = "aep_stage2b_upgrade_test"
+    psql(f"DROP DATABASE IF EXISTS {upgrade_db} WITH (FORCE);", db="postgres")
+    psql(f"CREATE DATABASE {upgrade_db};", db="postgres")
+    try:
+        for path in migration_paths[:-1]:
+            psql(file=path, db=upgrade_db)
+
+        owner_project = create_project("stage2b-upgrade-owner", db=upgrade_db)
+        legacy_project = create_project("stage2b-upgrade-grantless-read", db=upgrade_db)
+        valid_project = create_project("stage2b-upgrade-valid-read", db=upgrade_db)
+        mismatched_project = create_project("stage2b-upgrade-mismatched-read", db=upgrade_db)
+        decision_project = create_project("stage2b-upgrade-decision-scope", db=upgrade_db)
+
+        graph_id = scalar(
+            "INSERT INTO aep.dependency_graphs(graph_scope,owner_project_id,status) "
+            f"VALUES('shared',{lit(owner_project)}::uuid,'active') RETURNING graph_id::text;",
+            db=upgrade_db,
+        )
+        psql(
+            "INSERT INTO aep.dependency_graph_members(graph_id,project_id,access_mode) "
+            f"VALUES({lit(graph_id)}::uuid,{lit(owner_project)}::uuid,'owner');",
+            db=upgrade_db,
+        )
+        psql(
+            "INSERT INTO aep.dependency_graph_members(graph_id,project_id,access_mode) "
+            f"VALUES({lit(graph_id)}::uuid,{lit(legacy_project)}::uuid,'read');",
+            db=upgrade_db,
+        )
+
+        valid_decision = owner_decision(
+            valid_project, graph_id, "read", "valid legacy grant", db=upgrade_db
+        )
+        psql(
+            "INSERT INTO aep.dependency_graph_members("
+            "graph_id,project_id,access_mode,grant_decision_id) VALUES("
+            f"{lit(graph_id)}::uuid,{lit(valid_project)}::uuid,'read',{lit(valid_decision)}::uuid);",
+            db=upgrade_db,
+        )
+
+        mismatched_decision = owner_decision(
+            decision_project, graph_id, "read", "wrong project scope", db=upgrade_db
+        )
+        psql(
+            "INSERT INTO aep.dependency_graph_members("
+            "graph_id,project_id,access_mode,grant_decision_id) VALUES("
+            f"{lit(graph_id)}::uuid,{lit(mismatched_project)}::uuid,'read',"
+            f"{lit(mismatched_decision)}::uuid);",
+            db=upgrade_db,
+        )
+
+        source_work = register_work(
+            legacy_project, "legacy-shared-source", db=upgrade_db
+        )
+        target_work = register_work(
+            owner_project, "legacy-shared-target", db=upgrade_db
+        )
+        relation_id = scalar(
+            "INSERT INTO aep.work_relations("
+            "source_work_id,target_work_id,relation_type,required,dependency_graph_id"
+            ") VALUES("
+            f"{lit(source_work)}::uuid,{lit(target_work)}::uuid,'depends_on',"
+            f"NULL,{lit(graph_id)}::uuid) RETURNING relation_id::text;",
+            db=upgrade_db,
+        )
+
+        legacy_shape = scalar(
+            "SELECT count(*)::text FROM aep.dependency_graph_members "
+            f"WHERE graph_id={lit(graph_id)}::uuid "
+            f"AND project_id={lit(legacy_project)}::uuid "
+            "AND access_mode='read' AND grant_decision_id IS NULL;",
+            db=upgrade_db,
+        )
+        if legacy_shape != "1":
+            raise AssertionError("upgrade fixture is not a schema-valid legacy grantless read member")
+
+        psql(file=migration_paths[-1], db=upgrade_db)
+
+        grantless_state = scalar(
+            "SELECT member_status || '|' || (revoked_at IS NOT NULL)::text "
+            "FROM aep.dependency_graph_members "
+            f"WHERE graph_id={lit(graph_id)}::uuid "
+            f"AND project_id={lit(legacy_project)}::uuid;",
+            db=upgrade_db,
+        )
+        valid_state = scalar(
+            "SELECT member_status || '|' || (revoked_at IS NOT NULL)::text "
+            "FROM aep.dependency_graph_members "
+            f"WHERE graph_id={lit(graph_id)}::uuid "
+            f"AND project_id={lit(valid_project)}::uuid;",
+            db=upgrade_db,
+        )
+        mismatched_state = scalar(
+            "SELECT member_status || '|' || (revoked_at IS NOT NULL)::text "
+            "FROM aep.dependency_graph_members "
+            f"WHERE graph_id={lit(graph_id)}::uuid "
+            f"AND project_id={lit(mismatched_project)}::uuid;",
+            db=upgrade_db,
+        )
+        if grantless_state != "revoked|true":
+            raise AssertionError(f"grantless legacy read was not revoked: {grantless_state}")
+        if valid_state != "active|false":
+            raise AssertionError(f"exact approved direct-Owner read grant was not preserved: {valid_state}")
+        if mismatched_state != "revoked|true":
+            raise AssertionError(f"mis-scoped legacy read grant was not revoked: {mismatched_state}")
+
+        endpoint_mappings = scalar(
+            "SELECT count(*)::text || '|' || "
+            "count(*) FILTER (WHERE membership_status='active')::text "
+            "FROM aep.dependency_graph_works "
+            f"WHERE graph_id={lit(graph_id)}::uuid "
+            f"AND work_id IN ({lit(source_work)}::uuid,{lit(target_work)}::uuid);",
+            db=upgrade_db,
+        )
+        relation_history = scalar(
+            "SELECT count(*)::text || '|' || max(status) "
+            "FROM aep.work_relations "
+            f"WHERE relation_id={lit(relation_id)}::uuid;",
+            db=upgrade_db,
+        )
+        if endpoint_mappings != "2|2" or relation_history != "1|active":
+            raise AssertionError(
+                "upgrade did not preserve both historical relation endpoints: "
+                f"mappings={endpoint_mappings}, relation={relation_history}"
+            )
+
+        print(
+            "PASS Stage 2B populated upgrade: invalid legacy shared members revoked; "
+            "exact Owner grant retained; historical dependency endpoints preserved"
+        )
+    finally:
+        psql(f"DROP DATABASE IF EXISTS {upgrade_db} WITH (FORCE);", db="postgres")
 
 
 def create_shared_graph(owner_project: str) -> str:
@@ -334,6 +476,8 @@ def main() -> None:
         versions.append(int(match.group(1)))
     if versions != list(range(1, 7)):
         raise SystemExit(f"Expected contiguous migrations 0001..0006, got {versions}")
+
+    test_populated_legacy_upgrade(migration_paths)
 
     psql("DROP DATABASE IF EXISTS aep_stage2b_test WITH (FORCE);", db="postgres")
     psql("CREATE DATABASE aep_stage2b_test;", db="postgres")
