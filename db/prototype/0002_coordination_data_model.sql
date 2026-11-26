@@ -327,7 +327,7 @@ ALTER TABLE aep.evidence OWNER TO aep_owner;
 ALTER TABLE aep.operation_receipts OWNER TO aep_owner;
 ALTER TABLE aep.operation_receipt_events OWNER TO aep_owner;
 
-DO $
+DO $aep$
 DECLARE t text;
 BEGIN
   FOREACH t IN ARRAY ARRAY[
@@ -342,6 +342,6 @@ BEGIN
       t
     );
   END LOOP;
-END $$;
+END $aep$;
 
 REVOKE ALL ON ALL TABLES IN SCHEMA aep FROM PUBLIC, aep_runtime;
