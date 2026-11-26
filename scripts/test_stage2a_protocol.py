@@ -658,7 +658,7 @@ def main() -> None:
         "write_set_kind,conflict_key) VALUES("
         f"{lit(project_a)}::uuid,{lit(invalid_work)}::uuid,{lit(invalid_resource)}::uuid,"
         "'refs/heads/paths','path_set','path:/src');",
-        "work_resource_requirements_write_set_kind_check",
+        "work_resource_requirements_conflict_key_check",
         "unsupported path-overlap requirement",
     )
     psql(
