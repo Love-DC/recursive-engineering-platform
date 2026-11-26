@@ -1,54 +1,40 @@
-# Work Registry and coordination-model prototype boundary
+# Work Registry, coordination model, and Stage 2A protocol prototype
 
-This directory contains a PostgreSQL experiment for Stage 1A/1B.
+This directory contains a PostgreSQL experiment for the Stage 1A/1B data model and the Stage 2A transactional execution protocol.
 
-## What is implemented
+## Implemented
 
-- Canonical active Work identity uniqueness, separate from request idempotency.
-- Transactional register-or-link function with same-key replay and payload mismatch conflict.
-- ExternalRef exact uniqueness/linking.
-- Append-only Work registration events.
-- Physical Resource identity independent of Project namespace, with ProjectResource grant reference and mode constraints.
-- Execution attempt identity, per-Work attempt/fence uniqueness, one-active-Execution index, and same-Work current-execution foreign key.
-- ResourceClaim identity tied by composite foreign keys to the Work's project, the ProjectResource link, and the matching Execution/Work pair.
-- Typed parent_child, depends_on, and possible_duplicate relation records.
-- OwnerDecision status/provenance columns with a check preventing approved state unless direct-Owner provenance fields are present.
-- Project-scoped Evidence foreign keys and append-only evidence / operation receipt event tables.
-- Unique OperationReceipt key per provider.
+- Canonical active Work identity uniqueness, request idempotency, ExternalRef linking, and append-only registration events.
+- Physical Resource identity independent of Project namespace, ProjectResource grant provenance, Execution attempts, ResourceClaims, typed WorkRelations, dependency graph descriptors, OwnerDecision provenance, Evidence, and OperationReceipt records.
+- Stage 2A migration `0005_stage2a_atomic_execution_coordination.sql`:
+  - atomic Work claim and all-or-nothing physical resource reservation;
+  - expired-lease takeover, monotonic per-Work fencing, renewal, fenced finish/failure, and atomic reservation release;
+  - immutable WorkResourceRequirement declarations after execution begins;
+  - immutable physical Resource identity tuple (`provider`, `host`, `resource_type`, `stable_resource_id`, `canonical_key`); a changed target must receive a new `resource_id`;
+  - claim-time validation that each required Resource remains an active GitHub repository and each ref is a canonical fully-qualified GitHub branch ref;
+  - claim-time re-check of active `depends_on` prerequisites. Stage 2A accepts only completed (`delivered`) prerequisites in an active, same-project dependency graph owned by that project. Incomplete prerequisites, archived graphs, and shared/cross-project graph scope fail closed.
+- The Stage 2A test harness exercises independent PostgreSQL sessions, claim/takeover races, lease boundary behavior, resource conflicts, rollback, grant authorization, resource identity immutability, dependency eligibility, runtime RPC grants, and SECURITY DEFINER inventory.
 
 ## Verification
 
-CI applies the ordered migrations to a clean PostgreSQL 17.12 database and exercises the prototype integration tests. PR [#9](https://github.com/Love-DC/recursive-engineering-platform/pull/9) is merged to `main`; post-merge Actions Run #36 passed on the merge commit. The bounded final integration acceptance's sole stale-evidence-pointer finding was resolved by PRs #33–#35; Issue #32 is closed completed. The exact merge commit, CI results and test scope are maintained in the [canonical evidence record](https://github.com/Love-DC/recursive-engineering-platform/pull/9#issuecomment-7183275628). These tests do not prove populated-database migration upgrade/preflight behavior.
+The initial Stage 2A candidate at HEAD `285dbc092744cb5d0f88ab391e25a84257298919` passed GitHub Actions [Run #54](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45781729538) on PostgreSQL 17.12. That source was then independently reviewed and returned **CHANGES_REQUIRED**. The current PR #38 remediation candidate includes additional resource-identity and dependency-eligibility guards/tests; Run #54 does not validate those changes. A fresh exact-HEAD CI run and independent re-review are pending.
 
-Historical evidence (not final candidate evidence):
-- Run #24 ([45734761932](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45734761932)) passed for old SHA `d055fc1d6fbc7f83d83e35a43fefd6d89a90db43`.
-- Run #27 ([45735069544](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45735069544)) passed for review SHA `5648ce0de9e3d9bd6460645819d75bffb35dd772`.
-- Current integrated candidate evidence is pinned in the [canonical exact-HEAD evidence record](https://github.com/Love-DC/recursive-engineering-platform/pull/9#issuecomment-7183275628), which records the matching commit/tree, Actions run, PostgreSQL version, T01 rendezvous log and clean-disposable-database boundary. The test does not prove populated-database migration upgrades.
-
-See [the test harness](../../scripts/test_postgres_prototype.py).
+The Stage 1A/1B integrated baseline is merged through [PR #9](https://github.com/Love-DC/recursive-engineering-platform/pull/9). Its post-merge evidence, including disposable PostgreSQL 17.12 scope, remains in the [canonical evidence record](https://github.com/Love-DC/recursive-engineering-platform/pull/9#issuecomment-7183275628).
 
 ## What these tests do not prove
 
-These are schema and prototype-slice tests, not complete protocol acceptance:
-
-- No atomic claim RPC, lease renewal/takeover, monotonic fence transition, or stale execution write rejection.
-- No atomic resource reservation API; ResourceClaim currently enforces an exact resource/ref/conflict_key uniqueness model. Path overlap and normalized write-set conflicts are not implemented.
-- No atomic DAG insertion/cycle prevention. Shared graph write grants are represented by references, but status/scope validation and cross-project graph authorization are not implemented by a protocol function.
-- No current-execution status/fence/lease transition validation beyond declared foreign keys, uniqueness, and checks.
-- OwnerDecision provenance fields are a structural requirement, not cryptographic proof or a live check that an actual Owner message occurred.
-- No external GitHub operation executor or intent/receipt/reconciliation state machine.
-- No authenticated caller-to-project binding. A caller-supplied project_id is routing data, not authorization proof.
-- No production Supabase/MCP role or RLS audit.
+- Stage 2B atomic dependency-edge mutation, DAG cycle prevention, graph-wide concurrency, shared/cross-project dependency authorization, or READY invalidation after dependency/authority changes.
+- Path-overlap or normalized write-set conflict semantics; current resource exclusion is conservative exact whole-repository/branch-ref exclusion.
+- Populated-database migration upgrade/preflight safety.
+- A production Supabase deployment, production write API, authenticated caller-to-project binding, or hostile multi-tenant authorization.
+- GitHub adapter execution, external operation receipts/reconciliation, stale external side-effect prevention, or legacy RAE cutover.
+- An always-on LLM runtime or proof that an expired ChatGPT session has stopped acting.
 
 ## Security and deployment limitations
 
-This is a **trusted single-Owner test prototype**, not a production Supabase migration and not a hostile multi-tenant authorization design.
+This is a **trusted single-Owner test prototype**, not a production Supabase migration or production authorization interface.
 
-- Runtime access in Stage 1A is limited to the narrow register_work function; direct table grants are revoked.
-- Tables are owned by a non-superuser, non-BYPASSRLS aep_owner role and use FORCE RLS with owner policies in the ephemeral database.
-- Tests verify function ownership/search_path/EXECUTE and that the runtime role cannot directly read canonical tables.
-- Role creation DDL assumes a disposable PostgreSQL administrator connection. It is not intended to run unchanged against an existing Supabase project.
-- No existing Supabase project or legacy RAE database has been accessed or modified.
-
-Do not deploy or expose these prototype functions as production write APIs. D4 remains PROVISIONAL; D9, D13, D15, and D16 remain UNVERIFIED / OPEN.
-- This prototype has not been deployed to production Supabase. No legacy RAE project/database or pilot has been modified.
+- Disposable GitHub Actions PostgreSQL 17.12 only. No existing Supabase project or legacy RAE database has been accessed or modified.
+- Role creation assumes a disposable PostgreSQL administrator connection. It is not intended to run unchanged against an existing Supabase project.
+- The database fence does not revoke shared GitHub/MCP credentials or prevent every stale external side effect.
+- Do not deploy or expose these prototype functions as production write APIs. D4 remains PROVISIONAL; D9, D13, D15, and D16 remain UNVERIFIED / OPEN.
