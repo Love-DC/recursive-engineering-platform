@@ -151,20 +151,23 @@ def main() -> None:
     function = "'aep.register_work(uuid,text,uuid,text,text,integer,text,text,jsonb,jsonb)'::regprocedure"
     security = scalar(f"""
       SELECT
-        (SELECT NOT rolsuper AND NOT rolbypassrls FROM pg_roles WHERE rolname='aep_owner')
-        AND (SELECT prosecdef AND array_to_string(proconfig,',') LIKE '%search_path=pg_catalog,aep%'
-             FROM pg_proc WHERE oid={function})
-        AND (SELECT NOT COALESCE(bool_or(x.grantee=0 AND x.privilege_type='EXECUTE'),false)
-             FROM pg_proc p, LATERAL aclexplode(COALESCE(p.proacl,acldefault('f',p.proowner))) x
-             WHERE p.oid={function})
-        AND has_function_privilege('aep_runtime',{function},'EXECUTE')
-        AND NOT has_table_privilege('aep_runtime','aep.works','SELECT')
-        AND (SELECT bool_and(relrowsecurity AND relforcerowsecurity)
-             FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
-             WHERE n.nspname='aep' AND c.relkind='r');
+        (SELECT (NOT rolsuper AND NOT rolbypassrls)::text FROM pg_roles WHERE rolname='aep_owner')
+        || '|' || (SELECT prosecdef::text FROM pg_proc WHERE oid={function})
+        || '|' || (SELECT replace(array_to_string(proconfig,','),' ','')
+                   FROM pg_proc WHERE oid={function})
+        || '|' || (SELECT NOT COALESCE(bool_or(x.grantee=0 AND x.privilege_type='EXECUTE'),false)
+                   FROM pg_proc p, LATERAL aclexplode(COALESCE(p.proacl,acldefault('f',p.proowner))) x
+                   WHERE p.oid={function})::text
+        || '|' || has_function_privilege('aep_runtime',{function},'EXECUTE')::text
+        || '|' || (NOT has_table_privilege('aep_runtime','aep.works','SELECT'))::text
+        || '|' || (SELECT bool_and(relrowsecurity AND relforcerowsecurity)::text
+                   FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+                   WHERE n.nspname='aep' AND c.relkind='r');
     """)
-    if security != "t":
-        raise AssertionError(f"Security contract failed: {security}")
+    security_flags = security.split("|")
+    expected = ["true", "true", "search_path=pg_catalog,aep", "true", "true", "true", "true"]
+    if security_flags != expected:
+        raise AssertionError(f"Security contract flags differ: actual={security_flags}, expected={expected}")
     denied = psql("SET ROLE aep_runtime; SELECT count(*) FROM aep.works;",check=False)
     if denied.returncode == 0 or "permission denied" not in denied.stderr:
         raise AssertionError("Runtime role has unexpected direct table access")
