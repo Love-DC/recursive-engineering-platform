@@ -24,9 +24,9 @@ AS $function$
      AND NOT EXISTS (
        SELECT 1
        FROM generate_series(1, 31) AS control(code)
-       WHERE strpos(p_resource_ref, chr(control.code)) > 0
+       WHERE strpos(p_resource_ref COLLATE "C", chr(control.code) COLLATE "C") > 0
      )
-     AND strpos(p_resource_ref, chr(127)) = 0
+     AND strpos(p_resource_ref COLLATE "C", chr(127) COLLATE "C") = 0
      AND NOT EXISTS (
        SELECT 1
        FROM unnest(ARRAY[' ', '~', '^', ':', '?', '*', '[', chr(92)]) AS forbidden(character)
