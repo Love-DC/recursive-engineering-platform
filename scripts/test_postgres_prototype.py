@@ -235,8 +235,8 @@ def main() -> None:
         f"({lit(graph_id)}::uuid,{lit(project2)}::uuid,'read');"
     )
     missing_graph_grant = psql(
-        f"INSERT INTO aep.dependency_graph_members(graph_id,project_id,access_mode) "
-        f"VALUES({lit(graph_id)}::uuid,{lit(project2)}::uuid,'write');",
+        f"UPDATE aep.dependency_graph_members SET access_mode='write' "
+        f"WHERE graph_id={lit(graph_id)}::uuid AND project_id={lit(project2)}::uuid;",
         check=False,
     )
     if missing_graph_grant.returncode == 0:
