@@ -204,8 +204,9 @@ def recover(
 
 
 def test_recovery_without_prior_session_context(
-    project_id: str, resource_id: str, repository_id: str, manifest: dict,
-) -> tuple[str, str, int, str, str]:
+    project_id: str, resource_id: str, repository_id: str,
+    read_resource_id: str, owner_decision_id: str, manifest: dict,
+) -> tuple[str, str, int, str, str, str]:
     session_a = str(uuid4())
     session_b = str(uuid4())
     work_id, execution_a, fence_a = create_running_work(project_id, session_a)
@@ -241,6 +242,19 @@ def test_recovery_without_prior_session_context(
         f"{lit('c'*64)},"
         f"{json_sql({'session_id':session_a,'execution_id':execution_a,'fence':fence_a})},"
         f"{json_sql({'resume_cursor':'step-4','artifact_kind':'checkpoint'})});"
+    )
+
+
+    psql(
+        "INSERT INTO aep.evidence("
+        "project_id,work_id,execution_id,evidence_type,source_ref,source_revision,"
+        "content_sha256,provenance,payload"
+        ") VALUES("
+        f"{lit(project_id)}::uuid,{lit(work_id)}::uuid,{lit(execution_a)}::uuid,"
+        "'source_observation','artifact://stage4/source/second','rev-2',"
+        f"{lit('f'*64)},"
+        f"{json_sql({'observed_by_session':session_a,'execution_id':execution_a,'fence':fence_a})},"
+        f"{json_sql({'observation':'second source-derived fact'})});"
     )
 
     checkpoint_payload = {
@@ -330,6 +344,35 @@ def test_recovery_without_prior_session_context(
                and row["source_ref"] == "artifact://stage4/checkpoint/707"
                for row in snapshot["evidence"]):
         raise AssertionError("T10 source evidence/checkpoint reference was not recovered")
+    if len([row for row in snapshot["dependencies"]
+            if row["source_work_id"] == work_id and row["relation_type"] == "parent_child"
+            and row["required"] is False]) != 2:
+        raise AssertionError("T10 dependency edges/target relationships were not recovered")
+    if not any(row["resource_id"] == resource_id and row["access_mode"] == "write"
+               and row["grant_version"] == 1
+               and row["grant_decision_id"] == owner_decision_id
+               for row in snapshot["project_resources"]):
+        raise AssertionError("T10 primary ProjectResource grant and version were not recovered")
+    if not any(row["resource_id"] == read_resource_id and row["access_mode"] == "read"
+               and row["grant_version"] == 2
+               and row["grant_decision_id"] is None
+               for row in snapshot["project_resources"]):
+        raise AssertionError("T10 read-only ProjectResource grant and version were not recovered")
+    if not any(row["decision_id"] == owner_decision_id and row["decision_version"] == 1
+               and row["status"] == "approved"
+               for row in snapshot["owner_decisions"]):
+        raise AssertionError("T10 approved OwnerDecision version/provenance was not recovered")
+    if not any(row["resource_id"] == resource_id
+               and row["adapter_key"] == "github-session-tools"
+               and row["schema_version"] == 1
+               and row["manifest"] == manifest
+               for row in snapshot["adapter_capabilities"]):
+        raise AssertionError("T10 primary adapter capability manifest was not recovered")
+    if not any(row["resource_id"] == read_resource_id
+               and row["adapter_key"] == "github-session-tools"
+               and row["manifest"] == manifest
+               for row in snapshot["adapter_capabilities"]):
+        raise AssertionError("T10 read-resource adapter capability manifest was not recovered")
     if not any(row["operation_receipt_id"] == receipt_id
                and row["status"] == "uncertain"
                and row["reconciliation_status"] == "pending"
@@ -350,28 +393,14 @@ def test_recovery_without_prior_session_context(
     if "chat_messages" in definition or "conversation_history" in definition or "transcript" in definition:
         raise AssertionError("T11 recovery function contains a chat transcript dependency")
 
-    bounded_snapshot = recover(project_id, str(uuid4()), work_limit=1, related_limit=1)
-    bounded_collections = (
-        "dependencies", "executions", "work_events", "evidence", "deliveries",
-        "delivery_evidence", "operation_receipts", "operation_receipt_events",
-        "project_resources", "owner_decisions", "adapter_capabilities",
-    )
-    for collection in bounded_collections:
-        if len(bounded_snapshot[collection]) > 1:
-            raise AssertionError(
-                f"related_limit did not bound {collection}: {len(bounded_snapshot[collection])}"
-            )
-    if bounded_snapshot["related_data_truncated"]["work_events"] is not True:
-        raise AssertionError("recovery did not disclose that the work-event history was truncated")
-    if bounded_snapshot["work_list_truncated"] is not False:
-        raise AssertionError("recovery incorrectly reported the one-item Work list as truncated")
     print("PASS T10: fresh session reconstructs Work, dependencies, Execution/fence/lease, delivery, evidence, checkpoints and receipts")
     print("PASS T11: recovery uses only durable PostgreSQL state and requires no prior chat transcript")
-    return work_id, execution_a, fence_a, session_a, session_b
+    return work_id, execution_a, fence_a, session_a, session_b, receipt_id
 
 
 def test_expiry_takeover_and_stale_checkpoint(
     project_id: str, work_id: str, execution_a: str, fence_a: int, session_a: str,
+    resource_id: str, repository_id: str, original_receipt_id: str,
 ) -> None:
     psql(
         "UPDATE aep.executions SET lease_until=clock_timestamp()-interval '1 second' "
@@ -405,6 +434,45 @@ def test_expiry_takeover_and_stale_checkpoint(
     if execution_b == execution_a or fence_b <= fence_a:
         raise AssertionError("lease takeover did not create a new execution and greater fence")
 
+    delivery_b = json.loads(scalar(
+        "SELECT aep.allocate_execution_delivery("
+        f"{lit(work_id)}::uuid,{lit(execution_b)}::uuid,{fence_b},"
+        f"{lit(resource_id)}::uuid,'github.com',{lit(repository_id)},"
+        "'Love-DC/recursive-engineering-platform','refs/heads/main',"
+        f"{lit('a'*40)});"
+    ))
+    pr_sha_b = "e" * 40
+    psql(
+        "SELECT aep.record_delivery_pr_state("
+        f"{lit(execution_b)}::uuid,708,"
+        f"{lit('https://github.com/Love-DC/recursive-engineering-platform/pull/708')},"
+        f"{lit(pr_sha_b)},'github://test/pr/708');"
+    )
+    psql(
+        "SELECT aep.record_delivery_evidence("
+        f"{lit(execution_b)}::uuid,'ci',{lit(pr_sha_b)},'github://actions/test/708',NULL,"
+        f"{json_sql({'tested_sha':pr_sha_b,'conclusion':'success','run_id':708})});"
+    )
+    receipt_b = scalar(
+        "INSERT INTO aep.operation_receipts("
+        "work_id,execution_id,provider,operation_key,operation_type,target_resource_id,"
+        "target_ref,request_payload_sha256,intent_payload,status,reconciliation_status,"
+        "execution_fence,target_host,target_repository_id"
+        ") VALUES("
+        f"{lit(work_id)}::uuid,{lit(execution_b)}::uuid,'github','lost-pr-response-after-takeover',"
+        "'pull_request_create',"
+        f"{lit(resource_id)}::uuid,{lit(delivery_b['delivery_branch'])},"
+        f"{lit('9'*64)},"
+        f"{json_sql({'head':delivery_b['delivery_branch'],'base':'main'})},"
+        "'uncertain','pending',"
+        f"{fence_b},'github.com',{lit(repository_id)}"
+        ") RETURNING operation_receipt_id::text;"
+    )
+    psql(
+        "INSERT INTO aep.operation_receipt_events(operation_receipt_id,event_type,event_payload) "
+        f"VALUES({lit(receipt_b)}::uuid,'reconciliation_started',"
+        f"{json_sql({'reason':'second ambiguous response','lookup_required':True})});"
+    )
     expect_error(
         "SELECT aep.record_session_checkpoint("
         f"{lit(work_id)}::uuid,{lit(execution_a)}::uuid,{fence_a},"
@@ -428,11 +496,41 @@ def test_expiry_takeover_and_stale_checkpoint(
     new_row = next(row for row in snapshot["executions"] if row["execution_id"] == execution_b)
     if old_row["status"] != "expired" or new_row["is_current"] is not True:
         raise AssertionError("recovery did not preserve the expired prior attempt and current execution")
+    if old_row["old_session_may_still_be_active"] is not True:
+        raise AssertionError("takeover incorrectly implied that the expired old ChatGPT session had stopped")
+    if old_row["session_termination_observed"] is not False:
+        raise AssertionError("recovery fabricated a trusted old-session termination observation")
+    if new_row["old_session_may_still_be_active"] is not True:
+        raise AssertionError("recovery must remain conservative for the current session too")
     if not any(row["execution_id"] == execution_a for row in snapshot["deliveries"]):
         raise AssertionError("takeover discarded the prior per-execution delivery record")
     if not any(row["execution_id"] == execution_a and row["status"] == "uncertain"
                for row in snapshot["operation_receipts"]):
         raise AssertionError("takeover discarded an ambiguous old-execution receipt")
+    bounded_snapshot = recover(project_id, str(uuid4()), work_limit=100, related_limit=1)
+    bounded_collections = (
+        "dependencies", "executions", "work_events", "evidence", "deliveries",
+        "delivery_evidence", "operation_receipts", "operation_receipt_events",
+        "project_resources", "owner_decisions", "adapter_capabilities",
+    )
+    truncation_flags = bounded_snapshot["related_data_truncated"]
+    for collection in bounded_collections:
+        if len(bounded_snapshot[collection]) > 1:
+            raise AssertionError(
+                f"related_limit did not bound {collection}: {len(bounded_snapshot[collection])}"
+            )
+        if truncation_flags.get(collection) is not True:
+            raise AssertionError(
+                f"{collection} was not marked truncated although fixture rows exceed related_limit=1"
+            )
+    if bounded_snapshot["work_list_truncated"] is not False:
+        raise AssertionError("recovery incorrectly reported the 100-item Work list as truncated")
+
+    truncated_work_snapshot = recover(project_id, str(uuid4()), work_limit=1, related_limit=1)
+    if len(truncated_work_snapshot["work_items"]) != 1:
+        raise AssertionError("work_limit did not bound the Work list to one item")
+    if truncated_work_snapshot["work_list_truncated"] is not True:
+        raise AssertionError("Work-list truncation was not reported separately")
     print("PASS T10/T11: lease expiry is not session termination; takeover fences stale checkpoints and retains attempt history")
     return
 
@@ -461,12 +559,13 @@ def test_authorization_gate_and_limits(project_id: str) -> None:
 def main() -> None:
     manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
     setup_database()
-    project_id, resource_id, repository_id = setup_project(manifest)
-    work_id, execution_a, fence_a, session_a, _session_b = test_recovery_without_prior_session_context(
-        project_id, resource_id, repository_id, manifest
+    project_id, resource_id, repository_id, read_resource_id, owner_decision_id = setup_project(manifest)
+    work_id, execution_a, fence_a, session_a, _session_b, receipt_id = test_recovery_without_prior_session_context(
+        project_id, resource_id, repository_id, read_resource_id, owner_decision_id, manifest
     )
     test_expiry_takeover_and_stale_checkpoint(
-        project_id, work_id, execution_a, fence_a, session_a
+        project_id, work_id, execution_a, fence_a, session_a,
+        resource_id, repository_id, receipt_id
     )
     test_authorization_gate_and_limits(project_id)
     print("PASS Stage 4A PostgreSQL 17.12 session recovery prototype: T10, T11")
