@@ -81,6 +81,20 @@ CREATE TABLE aep.project_resources (
 
 CREATE INDEX project_resources_resource_idx ON aep.project_resources(resource_id, status);
 
+ALTER TABLE aep.work_requests
+  ADD CONSTRAINT work_requests_project_work_fk
+  FOREIGN KEY (project_id, work_id)
+  REFERENCES aep.works(project_id, work_id);
+
+ALTER TABLE aep.work_events
+  ADD CONSTRAINT work_events_project_work_fk
+  FOREIGN KEY (project_id, work_id)
+  REFERENCES aep.works(project_id, work_id);
+
+CREATE UNIQUE INDEX dependency_graph_one_owner_uq
+  ON aep.dependency_graph_members(graph_id)
+  WHERE access_mode = 'owner';
+
 CREATE TABLE aep.dependency_graphs (
   graph_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   graph_scope text NOT NULL CHECK (graph_scope IN ('project','shared')),
