@@ -81,20 +81,6 @@ CREATE TABLE aep.project_resources (
 
 CREATE INDEX project_resources_resource_idx ON aep.project_resources(resource_id, status);
 
-ALTER TABLE aep.work_requests
-  ADD CONSTRAINT work_requests_project_work_fk
-  FOREIGN KEY (project_id, work_id)
-  REFERENCES aep.works(project_id, work_id);
-
-ALTER TABLE aep.work_events
-  ADD CONSTRAINT work_events_project_work_fk
-  FOREIGN KEY (project_id, work_id)
-  REFERENCES aep.works(project_id, work_id);
-
-CREATE UNIQUE INDEX dependency_graph_one_owner_uq
-  ON aep.dependency_graph_members(graph_id)
-  WHERE access_mode = 'owner';
-
 CREATE TABLE aep.dependency_graphs (
   graph_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   graph_scope text NOT NULL CHECK (graph_scope IN ('project','shared')),
@@ -120,6 +106,10 @@ CREATE TABLE aep.dependency_graph_members (
 
 CREATE INDEX dependency_graph_members_project_idx
   ON aep.dependency_graph_members(project_id, graph_id);
+
+CREATE UNIQUE INDEX dependency_graph_one_owner_uq
+  ON aep.dependency_graph_members(graph_id)
+  WHERE access_mode = 'owner';
 
 CREATE TABLE aep.executions (
   execution_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -160,6 +150,16 @@ ALTER TABLE aep.works
   ADD COLUMN fence_generation bigint NOT NULL DEFAULT 0 CHECK (fence_generation >= 0),
   ADD COLUMN owner_decision_id uuid REFERENCES aep.owner_decisions(decision_id),
   ADD CONSTRAINT works_project_work_uq UNIQUE (project_id, work_id);
+
+ALTER TABLE aep.work_requests
+  ADD CONSTRAINT work_requests_project_work_fk
+  FOREIGN KEY (project_id, work_id)
+  REFERENCES aep.works(project_id, work_id);
+
+ALTER TABLE aep.work_events
+  ADD CONSTRAINT work_events_project_work_fk
+  FOREIGN KEY (project_id, work_id)
+  REFERENCES aep.works(project_id, work_id);
 
 ALTER TABLE aep.works
   ADD CONSTRAINT works_current_execution_same_work_fk
