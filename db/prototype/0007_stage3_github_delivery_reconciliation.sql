@@ -432,6 +432,16 @@ BEGIN
       USING ERRCODE = '22023';
   END IF;
 
+  IF p_evidence_kind = 'ci'
+     AND v_capabilities#>>'{ci_lookup,status}' <> 'supported' THEN
+    RAISE EXCEPTION 'CI lookup is not supported by the repository adapter'
+      USING ERRCODE = '0A000';
+  ELSIF p_evidence_kind = 'post_merge_ci'
+     AND v_capabilities#>>'{post_merge_verification,status}' <> 'supported' THEN
+    RAISE EXCEPTION 'Post-merge verification is not supported by the repository adapter'
+      USING ERRCODE = '0A000';
+  END IF;
+
   IF p_evidence_kind = 'process_review' THEN
     IF v_capabilities#>>'{process_review,status}' <> 'supported'
        OR p_payload->>'github_review_state' <> 'COMMENTED' THEN
