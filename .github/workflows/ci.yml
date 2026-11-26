@@ -59,7 +59,18 @@ jobs:
 
       - name: Install PostgreSQL client
         run: |
-          sudo apt-get update
+          # Only refresh Ubuntu's official package indexes. A third-party
+          # Microsoft feed has intermittently returned HTTP 403 on hosted
+          # runners and should not block PostgreSQL prototype verification.
+          ubuntu_sources="$(find /etc/apt/sources.list.d -maxdepth 1 -type f -name 'ubuntu.sources' -print -quit)"
+          if [ -z "$ubuntu_sources" ]; then
+            echo "Ubuntu official apt source file was not found" >&2
+            exit 1
+          fi
+          sudo apt-get update \
+            -o Dir::Etc::sourcelist="$ubuntu_sources" \
+            -o Dir::Etc::sourceparts="-" \
+            -o APT::Get::List-Cleanup="0"
           sudo apt-get install --yes postgresql-client
 
       - name: Run clean-database and concurrency tests
