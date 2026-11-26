@@ -18,7 +18,7 @@ This directory contains a PostgreSQL experiment for Stage 1A/1B.
 
 ## Verification
 
-CI applies the ordered migrations to a clean PostgreSQL 17.12 database and exercises the prototype integration tests. PR [#9](https://github.com/Love-DC/recursive-engineering-platform/pull/9) remains open and unmerged. The bounded final integration acceptance returned CHANGES_REQUIRED solely for stale duplicated evidence pointers ([report](https://github.com/Love-DC/recursive-engineering-platform/pull/9#issuecomment-7182929171)). The current commit/tree, exact-HEAD CI run and test scope are maintained in the [canonical evidence record](https://github.com/Love-DC/recursive-engineering-platform/pull/9#issuecomment-7183275628), avoiding self-referential moving SHA/Run copies.
+CI applies the ordered migrations to a clean PostgreSQL 17.12 database and exercises the prototype integration tests. PR [#9](https://github.com/Love-DC/recursive-engineering-platform/pull/9) is merged to `main`; post-merge Actions Run #36 passed on the merge commit. The bounded final integration acceptance's sole stale-evidence-pointer finding was resolved by PRs #33–#35; Issue #32 is closed completed. The exact merge commit, CI results and test scope are maintained in the [canonical evidence record](https://github.com/Love-DC/recursive-engineering-platform/pull/9#issuecomment-7183275628). These tests do not prove populated-database migration upgrade/preflight behavior.
 
 Historical evidence (not final candidate evidence):
 - Run #24 ([45734761932](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45734761932)) passed for old SHA `d055fc1d6fbc7f83d83e35a43fefd6d89a90db43`.
