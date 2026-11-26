@@ -75,13 +75,14 @@ def setup_database() -> None:
     print("PASS T26: clean migrations 0001..0009 on PostgreSQL 17.12")
 
 
-def setup_project(manifest: dict) -> tuple[str, str, str]:
+def setup_project(manifest: dict) -> tuple[str, str, str, str, str]:
     project_id = scalar(
         "INSERT INTO aep.projects(project_key,name) "
         "VALUES('stage4-recovery-' || substr(gen_random_uuid()::text,1,8),"
         "'Stage 4 recovery fixture') RETURNING project_id;"
     )
     resource_id = str(uuid4())
+    read_resource_id = str(uuid4())
     repository_id = "1471589776"
     psql(
         "INSERT INTO aep.resources(resource_id,provider,host,resource_type,"
@@ -111,7 +112,34 @@ def setup_project(manifest: dict) -> tuple[str, str, str]:
         "SELECT aep.register_delivery_adapter_manifest("
         f"{lit(resource_id)}::uuid,{json_sql(manifest)},{lit(str(uuid4()))}::uuid);"
     )
-    return project_id, resource_id, repository_id
+
+    # A second read-only resource proves that recovery includes multiple active
+    # project grants and a capability manifest for each linked resource.
+    psql(
+        "INSERT INTO aep.resources(resource_id,provider,host,resource_type,"
+        "stable_resource_id,canonical_key,display_name) VALUES("
+        f"{lit(read_resource_id)}::uuid,'github','github.com','repository',"
+        "'1471589777','repository:1471589777','Stage 4 read-only fixture repository');"
+    )
+    psql(
+        "INSERT INTO aep.project_resources("
+        "project_id,resource_id,access_mode,status,grant_version,grant_decision_id"
+        ") VALUES("
+        f"{lit(project_id)}::uuid,{lit(read_resource_id)}::uuid,'read','active',2,NULL);"
+    )
+    psql(
+        "SELECT aep.register_delivery_adapter_manifest("
+        f"{lit(read_resource_id)}::uuid,{json_sql(manifest)},{lit(str(uuid4()))}::uuid);"
+    )
+    observation_decision_id = scalar(
+        "INSERT INTO aep.owner_decisions("
+        "scope_type,scope_key,decision_key,statement,decision_version,status"
+        ") VALUES("
+        f"'project',{lit(project_id)},'stage4-recovery-observation',"
+        "'Test-only recovery observation decision',1,'proposed'"
+        ") RETURNING decision_id;"
+    )
+    return project_id, resource_id, repository_id, read_resource_id, decision_id
 
 
 def create_running_work(project_id: str, session_id: str) -> tuple[str, str, int]:
@@ -122,6 +150,23 @@ def create_running_work(project_id: str, session_id: str) -> tuple[str, str, int
         "1,'implementation','Recoverable Stage 4 fixture',"
         "'{\"acceptance\":[\"recover execution\",\"recover delivery\"]}'::jsonb,NULL);"
     )
+    dependency_ids = [
+        scalar(
+            "SELECT work_id::text FROM aep.register_work("
+            f"{lit(project_id)}::uuid,{lit('stage4-dependency-request-'+str(uuid4()))},"
+            f"{lit(str(uuid4()))}::uuid,'stage4_recovery',{lit('dependency-'+str(uuid4()))},"
+            "1,'implementation','Recovery dependency fixture','{}'::jsonb,NULL);"
+        )
+        for _ in range(2)
+    ]
+    for dependency_id in dependency_ids:
+        psql(
+            "INSERT INTO aep.work_relations("
+            "source_work_id,target_work_id,relation_type,required,status"
+            ") VALUES("
+            f"{lit(work_id)}::uuid,{lit(dependency_id)}::uuid,"
+            "'parent_child',false,'active');"
+        )
     state = scalar(f"SELECT work_status FROM aep.set_work_ready({lit(work_id)}::uuid);")
     if state != "ready":
         raise AssertionError(f"Work did not become ready: {state}")
