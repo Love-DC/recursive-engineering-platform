@@ -75,15 +75,15 @@ def scalar(sql: str) -> str:
 
 
 def main() -> None:
-    migrations = sorted(MIGRATIONS.glob("*.sql"))
+    migrations = sorted(path for path in MIGRATIONS.glob("*.sql") if path.name[:4] <= "0006")
     versions: list[int] = []
     for path in migrations:
         match = re.fullmatch(r"(\d{4})_[a-z0-9_]+\.sql", path.name)
         if not match:
             raise SystemExit(f"Invalid prototype migration filename: {path.name}")
         versions.append(int(match.group(1)))
-    if not migrations or versions != sorted(set(versions)):
-        raise SystemExit(f"Missing, duplicate, or unordered migrations: {versions}")
+    if versions != list(range(1, 7)):
+        raise SystemExit(f"Expected the Stage 1B baseline migrations 0001..0006, got {versions}")
 
     psql("DROP DATABASE IF EXISTS aep_test WITH (FORCE);", db="postgres")
     psql("CREATE DATABASE aep_test;", db="postgres")
