@@ -327,9 +327,10 @@ def main() -> None:
         raise AssertionError("Evidence ledger accepted mutation")
     print("PASS Stage 1B: project-scoped Evidence foreign keys and append-only source ledger")
 
+    intent_payload = lit(json.dumps({"head": "deadbeef"})) + "::jsonb"
     receipt_id = scalar(
         "INSERT INTO aep.operation_receipts(work_id,execution_id,provider,operation_key,operation_type,request_payload_sha256,intent_payload) VALUES "
-        f"({lit(work_one)}::uuid,{lit(execution_one)}::uuid,'github','create-pr-001','create_pull_request',{lit(digest)},'{{\"head\":\"deadbeef\"}}'::jsonb) "
+        f"({lit(work_one)}::uuid,{lit(execution_one)}::uuid,'github','create-pr-001','create_pull_request',{lit(digest)},{intent_payload}) "
         "RETURNING operation_receipt_id;"
     )
     psql(
