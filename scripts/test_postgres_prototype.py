@@ -182,6 +182,175 @@ def main() -> None:
     if mutation.returncode == 0 or "append-only" not in mutation.stderr:
         raise AssertionError("work_events accepted mutation")
     print("PASS security slice: fixed SECURITY DEFINER path, non-bypass owner, forced RLS, narrow grants, append-only events")
+    # Stage 1B: physical resources are independent of project namespace.
+    project2 = scalar(
+        "INSERT INTO aep.projects(project_key,name) VALUES('prototype-two','Second project') RETURNING project_id;"
+    )
+    resource_id = scalar(
+        "INSERT INTO aep.resources(provider,host,resource_type,stable_resource_id,canonical_key,display_name) "
+        "VALUES('github','github.com','repository','1471589776','repo:1471589776','recursive-engineering-platform') "
+        "RETURNING resource_id;"
+    )
+    psql(
+        f"INSERT INTO aep.project_resources(project_id,resource_id,access_mode) VALUES "
+        f"({lit(project_id)}::uuid,{lit(resource_id)}::uuid,'read_write'),"
+        f"({lit(project2)}::uuid,{lit(resource_id)}::uuid,'read_write');"
+    )
+    if scalar(f"SELECT count(*) FROM aep.project_resources WHERE resource_id={lit(resource_id)}::uuid;") != "2":
+        raise AssertionError("One physical resource could not be referenced by two project namespaces")
+    duplicate_resource = psql(
+        "INSERT INTO aep.resources(provider,host,resource_type,stable_resource_id,canonical_key) "
+        "VALUES('github','github.com','repository','1471589776','repo:duplicate');",
+        check=False,
+    )
+    if duplicate_resource.returncode == 0:
+        raise AssertionError("Duplicate provider-stable Resource identity was accepted")
+    print("PASS Stage 1B: physical Resource identity is distinct from ProjectResource links")
+
+    # OwnerDecision approval shape requires explicit direct-owner provenance fields.
+    invalid_approval = psql(
+        "INSERT INTO aep.owner_decisions(scope_type,scope_key,decision_key,statement,decision_version,status) "
+        "VALUES('project','prototype','release','Approve release',1,'approved');",
+        check=False,
+    )
+    if invalid_approval.returncode == 0:
+        raise AssertionError("OwnerDecision accepted approved status without direct Owner provenance")
+    decision_id = scalar(
+        "INSERT INTO aep.owner_decisions(scope_type,scope_key,decision_key,statement,decision_version,status,proposed_by_session_id) "
+        f"VALUES('project','prototype','future-write-grant','Future write grant',1,'proposed',{lit(str(uuid4()))}::uuid) "
+        "RETURNING decision_id;"
+    )
+    if not decision_id:
+        raise AssertionError("OwnerDecision proposal was not created")
+    print("PASS Stage 1B: OwnerDecision approval cannot omit provenance fields")
+
+    # Create a graph descriptor. Shared graph write membership requires a grant reference.
+    graph_id = scalar(
+        "INSERT INTO aep.dependency_graphs(graph_scope,owner_project_id) "
+        f"VALUES('shared',{lit(project_id)}::uuid) RETURNING graph_id;"
+    )
+    psql(
+        f"INSERT INTO aep.dependency_graph_members(graph_id,project_id,access_mode) "
+        f"VALUES({lit(graph_id)}::uuid,{lit(project_id)}::uuid,'owner'),"
+        f"({lit(graph_id)}::uuid,{lit(project2)}::uuid,'read');"
+    )
+    missing_graph_grant = psql(
+        f"INSERT INTO aep.dependency_graph_members(graph_id,project_id,access_mode) "
+        f"VALUES({lit(graph_id)}::uuid,{lit(project2)}::uuid,'write');",
+        check=False,
+    )
+    if missing_graph_grant.returncode == 0:
+        raise AssertionError("Shared graph write membership was accepted without a grant reference")
+
+    work_one = scalar(register(project_id,"model-work-one","model-work-one",title="Model work one")).split("|")[0]
+    work_two = scalar(register(project2,"model-work-two","model-work-two",title="Model work two")).split("|")[0]
+    work_child = scalar(register(project_id,"model-work-child","model-work-child",title="Model child")).split("|")[0]
+    execution_one = str(uuid4())
+    execution_two = str(uuid4())
+    session_one = str(uuid4())
+    session_two = str(uuid4())
+    psql(
+        "INSERT INTO aep.executions(execution_id,work_id,session_id,attempt_no,status,lease_until,fence) VALUES "
+        f"({lit(execution_one)}::uuid,{lit(work_one)}::uuid,{lit(session_one)}::uuid,1,'running',now()+interval '5 minutes',1),"
+        f"({lit(execution_two)}::uuid,{lit(work_two)}::uuid,{lit(session_two)}::uuid,1,'running',now()+interval '5 minutes',1);"
+    )
+    psql(
+        f"UPDATE aep.works SET current_execution_id={lit(execution_one)}::uuid,fence_generation=1 "
+        f"WHERE work_id={lit(work_one)}::uuid;"
+    )
+    if scalar(f"SELECT current_execution_id::text || '|' || fence_generation::text FROM aep.works WHERE work_id={lit(work_one)}::uuid;") != f"{execution_one}|1":
+        raise AssertionError("Work current execution/fence projection did not retain the same-work Execution")
+    second_active = psql(
+        "INSERT INTO aep.executions(work_id,session_id,attempt_no,status,lease_until,fence) VALUES "
+        f"({lit(work_one)}::uuid,{lit(str(uuid4()))}::uuid,2,'claimed',now()+interval '5 minutes',2);",
+        check=False,
+    )
+    if second_active.returncode == 0:
+        raise AssertionError("More than one active Execution was accepted for one Work")
+    print("PASS Stage 1B: Execution attempts, attempt sequence, single-active index, and current Work pointer")
+
+    psql(
+        "INSERT INTO aep.resource_claims(resource_id,work_id,execution_id,resource_ref,write_set_kind,conflict_key,status,lease_until,fence) VALUES "
+        f"({lit(resource_id)}::uuid,{lit(work_one)}::uuid,{lit(execution_one)}::uuid,'refs/heads/main','repository_ref','*','active',now()+interval '5 minutes',1);"
+    )
+    resource_race = psql(
+        "INSERT INTO aep.resource_claims(resource_id,work_id,execution_id,resource_ref,write_set_kind,conflict_key,status,lease_until,fence) VALUES "
+        f"({lit(resource_id)}::uuid,{lit(work_two)}::uuid,{lit(execution_two)}::uuid,'refs/heads/main','repository_ref','*','active',now()+interval '5 minutes',1);",
+        check=False,
+    )
+    if resource_race.returncode == 0:
+        raise AssertionError("Two projects claimed the same physical repository/ref conflict key")
+    print("PASS Stage 1B: exact physical ResourceClaim uniqueness across two Project namespaces")
+
+    # Relation types are distinct: parent-child metadata and dependency graph edges.
+    psql(
+        "INSERT INTO aep.work_relations(source_work_id,target_work_id,relation_type,required) VALUES "
+        f"({lit(work_one)}::uuid,{lit(work_child)}::uuid,'parent_child',true);"
+    )
+    invalid_parent = psql(
+        "INSERT INTO aep.work_relations(source_work_id,target_work_id,relation_type) VALUES "
+        f"({lit(work_one)}::uuid,{lit(work_child)}::uuid,'parent_child');",
+        check=False,
+    )
+    if invalid_parent.returncode == 0:
+        raise AssertionError("parent_child relation accepted a missing required/optional value")
+    psql(
+        "INSERT INTO aep.work_relations(source_work_id,target_work_id,relation_type,dependency_graph_id) VALUES "
+        f"({lit(work_one)}::uuid,{lit(work_child)}::uuid,'depends_on',{lit(graph_id)}::uuid);"
+    )
+    duplicate_left = min(work_one, work_two)
+    duplicate_right = max(work_one, work_two)
+    psql(
+        "INSERT INTO aep.work_relations(source_work_id,target_work_id,relation_type) VALUES "
+        f"({lit(duplicate_left)}::uuid,{lit(duplicate_right)}::uuid,'possible_duplicate');"
+    )
+    print("PASS Stage 1B: typed WorkRelation constraints keep parent_child and depends_on distinct")
+
+    digest = "a" * 64
+    evidence_id = scalar(
+        "INSERT INTO aep.evidence(project_id,work_id,execution_id,evidence_type,source_ref,source_revision,content_sha256,provenance,payload) VALUES "
+        f"({lit(project_id)}::uuid,{lit(work_one)}::uuid,{lit(execution_one)}::uuid,'test_result','ci://run/1','head-sha',{lit(digest)},'{{}}'::jsonb,'{{}}'::jsonb) "
+        "RETURNING evidence_id;"
+    )
+    cross_project_evidence = psql(
+        "INSERT INTO aep.evidence(project_id,work_id,evidence_type,source_ref) VALUES "
+        f"({lit(project2)}::uuid,{lit(work_one)}::uuid,'test_result','ci://forged-cross-project');",
+        check=False,
+    )
+    if cross_project_evidence.returncode == 0:
+        raise AssertionError("Evidence accepted a Work belonging to a different Project")
+    evidence_mutation = psql(
+        f"UPDATE aep.evidence SET payload='{{}}'::jsonb WHERE evidence_id={lit(evidence_id)}::uuid;",
+        check=False,
+    )
+    if evidence_mutation.returncode == 0 or "append-only" not in evidence_mutation.stderr:
+        raise AssertionError("Evidence ledger accepted mutation")
+    print("PASS Stage 1B: project-scoped Evidence foreign keys and append-only source ledger")
+
+    receipt_id = scalar(
+        "INSERT INTO aep.operation_receipts(work_id,execution_id,provider,operation_key,operation_type,request_payload_sha256,intent_payload) VALUES "
+        f"({lit(work_one)}::uuid,{lit(execution_one)}::uuid,'github','create-pr-001','create_pull_request',{lit(digest)},'{{\"head\":\"deadbeef\"}}'::jsonb) "
+        "RETURNING operation_receipt_id;"
+    )
+    psql(
+        "INSERT INTO aep.operation_receipt_events(operation_receipt_id,event_type,event_payload) VALUES "
+        f"({lit(receipt_id)}::uuid,'intent_created','{{}}'::jsonb);"
+    )
+    duplicate_receipt = psql(
+        "INSERT INTO aep.operation_receipts(work_id,execution_id,provider,operation_key,operation_type,request_payload_sha256,intent_payload) VALUES "
+        f"({lit(work_one)}::uuid,{lit(execution_one)}::uuid,'github','create-pr-001','create_pull_request',{lit(digest)},'{{}}'::jsonb);",
+        check=False,
+    )
+    if duplicate_receipt.returncode == 0:
+        raise AssertionError("OperationReceipt accepted duplicate provider/operation_key")
+    receipt_event_mutation = psql(
+        f"UPDATE aep.operation_receipt_events SET event_payload='{{}}'::jsonb WHERE operation_receipt_id={lit(receipt_id)}::uuid;",
+        check=False,
+    )
+    if receipt_event_mutation.returncode == 0 or "append-only" not in receipt_event_mutation.stderr:
+        raise AssertionError("OperationReceipt event ledger accepted mutation")
+    print("PASS Stage 1B: unique external operation intent and append-only receipt events")
+
     print("All PostgreSQL prototype tests passed.")
 
 
