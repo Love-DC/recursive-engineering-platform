@@ -23,7 +23,37 @@ ALTER TABLE aep.dependency_graph_members
     CHECK (
       (member_status = 'active' AND revoked_at IS NULL)
       OR (member_status = 'revoked' AND revoked_at IS NOT NULL)
-    ),
+    );
+
+-- Migrations 0001-0005 allowed legacy shared read members without a grant.
+-- Fail closed during upgrade: retain only memberships backed by an exact,
+-- approved direct-Owner decision for this project, graph, and access mode.
+-- The approved-decision CHECK in 0002 also enforces direct-Owner provenance.
+UPDATE aep.dependency_graph_members AS member_row
+SET member_status = 'revoked',
+    revoked_at = clock_timestamp()
+WHERE member_row.access_mode IN ('read', 'write')
+  AND NOT EXISTS (
+    SELECT 1
+    FROM aep.dependency_graphs AS graph_row
+    JOIN aep.owner_decisions AS decision
+      ON decision.decision_id = member_row.grant_decision_id
+    WHERE graph_row.graph_id = member_row.graph_id
+      AND graph_row.graph_scope = 'shared'
+      AND decision.status = 'approved'
+      AND decision.scope_type = 'project'
+      AND decision.scope_key = member_row.project_id::text
+      AND decision.decision_key =
+        'dependency_graph:' || member_row.graph_id::text || ':' || member_row.access_mode
+      AND decision.approval_source_kind = 'direct_owner_message'
+      AND NULLIF(btrim(decision.approval_source_ref), '') IS NOT NULL
+      AND NULLIF(btrim(decision.approver_principal), '') IS NOT NULL
+      AND decision.approved_at IS NOT NULL
+      AND decision.approval_provenance ? 'direct_owner_confirmation'
+      AND decision.approval_provenance->>'direct_owner_confirmation' = 'true'
+  );
+
+ALTER TABLE aep.dependency_graph_members
   ADD CONSTRAINT dependency_graph_members_active_grant_ck
     CHECK (
       member_status = 'revoked'
