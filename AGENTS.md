@@ -9,7 +9,7 @@ This file is the repository-local entry contract for every AI session working in
 3. Read [the accepted architecture baseline](docs/ARCHITECTURE-BASELINE.md).
 4. Read [the decision register](docs/DECISION-REGISTER.md) before changing scope, permissions, deployment, or rollout.
 5. Read [the implementation roadmap](docs/IMPLEMENTATION-ROADMAP.md).
-6. Recover the live task and PR state from [the roadmap issue](https://github.com/Love-DC/recursive-engineering-platform/issues/2), [the Stage 0 issue](https://github.com/Love-DC/recursive-engineering-platform/issues/3), and [the Stage 1 issue](https://github.com/Love-DC/recursive-engineering-platform/issues/6).
+6. Recover the live task and PR state from [roadmap #2](https://github.com/Love-DC/recursive-engineering-platform/issues/2), [Stage 0 #3](https://github.com/Love-DC/recursive-engineering-platform/issues/3), [Stage 1A #6](https://github.com/Love-DC/recursive-engineering-platform/issues/6), [Stage 1B #8](https://github.com/Love-DC/recursive-engineering-platform/issues/8), and [the integrated delivery PR #9](https://github.com/Love-DC/recursive-engineering-platform/pull/9).
 
 The authoritative design source is [Architecture RFC #1, Current Design Snapshot v2.0](https://github.com/Love-DC/recursive-engineering-platform/issues/1#issuecomment-7161657103). Repository documents summarize it; they must not silently weaken or expand it.
 
@@ -53,16 +53,19 @@ An Owner-approved architecture baseline does not implicitly approve unresolved d
 
 ## Current implementation boundary
 
-Stage 0 foundation and the Stage 1 canonical registration prototype are being delivered together through PR #7. The prototype database is ephemeral CI-only.
+Stage 0 foundation and Stage 1A/1B schema prototype are combined in PR #9. The database is created only in disposable GitHub Actions PostgreSQL 17.12 jobs.
 
-Stage 1 must not:
-- mutate any existing Supabase project or database;
-- change the old RAE repository or database;
-- add production credentials or a production write gateway;
-- select pilot projects;
-- execute a legacy cutover;
-- implement or claim an always-on LLM runtime.
+Stage 1 prototype limitations:
+- no existing Supabase project or database is modified;
+- no old RAE repository or database is modified;
+- no production credentials or production write gateway;
+- no pilot repository selection or legacy cutover;
+- no always-on LLM runtime;
+- no authenticated project authorization protocol;
+- no atomic claim/lease/fence transition functions;
+- no atomic dependency graph mutation or cycle-prevention protocol;
+- no path-overlap resource locking or GitHub operation reconciliation implementation.
 
-The prototype is a trusted single-Owner experiment, not hostile multi-tenant isolation. In particular, its public function accepts a project_id as routing input and does not prove per-project authorization. Do not reuse it as a production interface until that boundary is designed and tested.
+The registration function accepts project_id as routing input only. The Stage 1B schema's grant, execution, relation, evidence, and receipt records are data structures; they do not imply that the related enforcement protocols are complete.
 
-Do not advance a stage merely because its documentation exists. Use the acceptance criteria and evidence required by the roadmap.
+Do not advance a stage merely because its documentation or tables exist. Use the acceptance criteria and evidence required by the roadmap.
