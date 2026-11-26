@@ -1,39 +1,46 @@
-# Work Registry prototype boundary
+# Work Registry and coordination-model prototype boundary
 
-This directory contains an executable PostgreSQL experiment for the first Stage 1 slice.
+This directory contains a PostgreSQL experiment for Stage 1A/1B.
 
-## What it proves
+## What is implemented
 
-The CI test applies the migration to a clean PostgreSQL 17.12 database and checks:
+- Canonical active Work identity uniqueness, separate from request idempotency.
+- Transactional register-or-link function with same-key replay and payload mismatch conflict.
+- ExternalRef exact uniqueness/linking.
+- Append-only Work registration events.
+- Physical Resource identity independent of Project namespace, with ProjectResource grant reference and mode constraints.
+- Execution attempt identity, per-Work attempt/fence uniqueness, one-active-Execution index, and same-Work current-execution foreign key.
+- ResourceClaim identity tied by composite foreign keys to the Work's project, the ProjectResource link, and the matching Execution/Work pair.
+- Typed parent_child, depends_on, and possible_duplicate relation records.
+- OwnerDecision status/provenance columns with a check preventing approved state unless direct-Owner provenance fields are present.
+- Project-scoped Evidence foreign keys and append-only evidence / operation receipt event tables.
+- Unique OperationReceipt key per provider.
 
-- exact active identity uniqueness under two independent concurrent connections;
-- request idempotency replay and same-key/different-payload rejection;
-- retry after a simulated lost response from a different session;
-- ExternalRef uniqueness, linking, and conflict rollback;
-- migration filename version uniqueness/order and fresh database application;
-- selected role/function/RLS properties of the prototype.
+## Verification
 
-See [the integration test](../../scripts/test_postgres_prototype.py) and [the exact candidate CI run](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45733477038).
+CI applies both ordered migrations to a clean PostgreSQL 17.12 database and exercises them with integration tests. See [the test harness](../../scripts/test_postgres_prototype.py), [the exact candidate PR](https://github.com/Love-DC/recursive-engineering-platform/pull/9), and [run #45734761932](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45734761932).
 
-## Identity contract
+## What these tests do not prove
 
-The prototype treats `identity_key` as an already normalized, deterministic key supplied by the registration caller. The database enforces exact equality over `project_id`, `identity_kind`, `identity_key`, and `identity_version`; it does not infer semantic similarity or normalize provider-specific identifiers. The version identifies the normalization/canonicalization contract used by the caller. Cross-version reconciliation and migration remain future work.
+These are schema and prototype-slice tests, not complete protocol acceptance:
+
+- No atomic claim RPC, lease renewal/takeover, monotonic fence transition, or stale execution write rejection.
+- No atomic resource reservation API; ResourceClaim currently enforces an exact resource/ref/conflict_key uniqueness model. Path overlap and normalized write-set conflicts are not implemented.
+- No atomic DAG insertion/cycle prevention. Shared graph write grants are represented by references, but status/scope validation and cross-project graph authorization are not implemented by a protocol function.
+- No current-execution status/fence/lease transition validation beyond declared foreign keys, uniqueness, and checks.
+- OwnerDecision provenance fields are a structural requirement, not cryptographic proof or a live check that an actual Owner message occurred.
+- No external GitHub operation executor or intent/receipt/reconciliation state machine.
+- No authenticated caller-to-project binding. A caller-supplied project_id is routing data, not authorization proof.
+- No production Supabase/MCP role or RLS audit.
 
 ## Security and deployment limitations
 
 This is a **trusted single-Owner test prototype**, not a production Supabase migration and not a hostile multi-tenant authorization design.
 
-- The `aep_runtime` role has no direct table privileges and can call only the narrow registration function.
-- The function runs as the non-superuser, non-BYPASSRLS `aep_owner` role with a fixed search_path and forced RLS policies.
-- However, the function currently accepts a caller-supplied `project_id` and checks only that the project is active. There is no project membership/grant table or authenticated caller-to-project binding. Therefore `project_id` is routing input, not authorization proof.
-- Tests simulate the runtime role with `SET ROLE` from the ephemeral database owner. They do not prove authentication or authorization in a real Supabase/MCP environment.
-- The role creation DDL assumes a disposable PostgreSQL administrator connection. It is not intended to run unchanged against an existing Supabase project.
-- No existing Supabase project or legacy RAE database is accessed or mutated.
+- Runtime access in Stage 1A is limited to the narrow register_work function; direct table grants are revoked.
+- Tables are owned by a non-superuser, non-BYPASSRLS aep_owner role and use FORCE RLS with owner policies in the ephemeral database.
+- Tests verify function ownership/search_path/EXECUTE and that the runtime role cannot directly read canonical tables.
+- Role creation DDL assumes a disposable PostgreSQL administrator connection. It is not intended to run unchanged against an existing Supabase project.
+- No existing Supabase project or legacy RAE database has been accessed or modified.
 
-Do not deploy or expose this function as a production write API. Before production use, the platform must choose and test an actual caller authorization boundary, project grants, role ownership/EXECUTE grants, Data API exposure, RLS, and the production write path. D4 remains provisional; D9 and D15 remain open.
-
-## Current scope
-
-Implemented only: initial Project records, canonical Work registration, request idempotency, ExternalRef uniqueness, and append-only registration events.
-
-Not implemented here: atomic claim, lease/fencing, dependency DAG, physical ResourceClaims, GitHub delivery/receipts/reconciliation, Context Compiler, memory, discovery, or production cutover.
+Do not deploy or expose these prototype functions as production write APIs. D4 remains provisional; D9 and D15 remain open.
