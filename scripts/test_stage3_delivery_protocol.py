@@ -323,23 +323,15 @@ def test_execution_delivery_and_lost_response(
     )
     if replay != receipt_b:
         raise AssertionError("T21 same key/same payload did not replay the reconciled receipt")
-    try:
-        create_intent(
-            work_id, execution_b, fence_b, key_b, "pull_request_create",
-            resource_id, repository_id, branch_b, {"head": branch_b, "base": "develop"}
-        )
-    except RuntimeError:
-        raise
-    else:
-        expect_error(
-            "SELECT aep.create_external_operation_intent("
-            f"{lit(work_id)}::uuid,{lit(execution_b)}::uuid,{fence_b},"
-            f"{lit(key_b)},'pull_request_create',{lit(resource_id)}::uuid,"
-            f"'github.com',{lit(repository_id)},{lit(branch_b)},"
-            f"{json_sql({'head':branch_b,'base':'develop')});",
-            "different payload",
-            "T21 same-key different-payload conflict",
-        )
+    expect_error(
+        "SELECT aep.create_external_operation_intent("
+        f"{lit(work_id)}::uuid,{lit(execution_b)}::uuid,{fence_b},"
+        f"{lit(key_b)},'pull_request_create',{lit(resource_id)}::uuid,"
+        f"'github.com',{lit(repository_id)},{lit(branch_b)},"
+        f"{json_sql({'head': branch_b, 'base': 'develop'})});",
+        "different payload",
+        "T21 same-key different-payload conflict",
+    )
     if provider.calls.get(key_b) != 1:
         raise AssertionError(f"T21 response-loss recovery created duplicate provider side effects: {provider.calls}")
     if scalar(
@@ -359,12 +351,6 @@ def test_exact_sha_lifecycle(
 ) -> None:
     pr_sha = pr_observation["pr_head_sha"]
     pr_number = pr_observation["pull_request_number"]
-    psql(
-        "SELECT aep.record_delivery_evidence("
-        f"{lit(execution_id)}::uuid,'ci',{lit('0'*40)},'github://ci/wrong-sha',NULL,"
-        f"{json_sql({'tested_sha':'0'*40,'conclusion':'success'})});",
-        check=False,
-    )
     expect_error(
         "SELECT aep.record_delivery_evidence("
         f"{lit(execution_id)}::uuid,'ci',{lit('0'*40)},'github://ci/wrong-sha',NULL,"
@@ -380,13 +366,6 @@ def test_exact_sha_lifecycle(
         execution_id, "process_review", pr_sha, "github://review/commented",
         "Love-DC", {"github_review_state": "COMMENTED", "review_id": 601}
     )
-    try:
-        record_evidence(
-            execution_id, "native_approval", pr_sha, "github://review/commented",
-            "Love-DC", {"github_review_state": "COMMENTED", "native_event": True}
-        )
-    except RuntimeError:
-        pass
     expect_error(
         "SELECT aep.record_delivery_evidence("
         f"{lit(execution_id)}::uuid,'native_approval',{lit(pr_sha)},"
