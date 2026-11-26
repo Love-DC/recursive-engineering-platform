@@ -11,7 +11,7 @@ Stage 1B data model: [Issue #8](https://github.com/Love-DC/recursive-engineering
 
 **Stage 1A — canonical Work registration implemented and tested in PR #9.** Active canonical identity uniqueness, request idempotency, ExternalRef uniqueness, append-only Work events, and the register-or-link transaction passed the named tests.
 
-**Stage 1B — minimum coordination data model implemented and schema-tested in PR #9.** Physical Resource / ProjectResource, Execution, ResourceClaim, dependency graph descriptors/membership, typed WorkRelations, OwnerDecision provenance, Evidence, and OperationReceipt/event records are present as additive migration 0002. Tests validate declared foreign keys, unique indexes, RLS table ownership, and selected integrity constraints. This does not implement the Stage 2 transaction protocols.
+**Stage 1B — minimum coordination data model implemented and schema-tested in PR #9.** Physical Resource / ProjectResource, Execution, ResourceClaim, dependency graph descriptors/membership, typed WorkRelations, OwnerDecision provenance, Evidence, and OperationReceipt/event records are present as additive migration 0002. CI validates selected foreign-key behaviors, unique-index behavior, RLS table ownership, and selected integrity constraints; schema presence does not mean every composite foreign key has been independently exercised. This does not implement the Stage 2 transaction protocols.
 
 ### Historical CI evidence — not final candidate evidence
 
