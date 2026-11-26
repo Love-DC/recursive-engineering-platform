@@ -59,7 +59,7 @@ An Owner-approved architecture baseline does not implicitly approve unresolved d
 - All database migrations under `db/prototype` run only against disposable GitHub Actions PostgreSQL 17.12. They are not Supabase deployment migrations or a production schema.
 
 The current prototype still has explicit limits:
-- no existing Supabase project or legacy RAE database is modified;
+- the Stage 0/1 prototype must not mutate any existing Supabase project or database; the legacy RAE database remains untouched;
 - no production coordination write path or production credentials;
 - no pilot registration, task import, or legacy cutover;
 - no always-on LLM runtime; operation remains A0 session-triggered;
