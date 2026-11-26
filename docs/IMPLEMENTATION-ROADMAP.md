@@ -7,22 +7,22 @@ Stage 1B data model: [Issue #8](https://github.com/Love-DC/recursive-engineering
 
 ## Current state
 
-**Stage 0 — implementation delivered in PR #9; acceptance pending.** Repository governance, architecture/decision docs, session entry contract, and repository CI are present. The PR is open and unmerged; refreshed final independent acceptance remains pending.
+**Stage 0 — implementation delivered in PR #9; exact-HEAD CI verified.** Repository governance, architecture/decision docs, session entry contract, and repository CI are present. PR #9 remains open and unmerged because the bounded final integration acceptance returned CHANGES_REQUIRED solely for stale documentation evidence pointers; this follow-up synchronizes those records. No Owner acceptance is implied.
 
 **Stage 1A — canonical Work registration implemented and tested in PR #9.** Active canonical identity uniqueness, request idempotency, ExternalRef uniqueness, append-only Work events, and the register-or-link transaction passed the named tests.
 
-**Stage 1B — minimum coordination data model implemented and schema-tested in PR #9.** Physical Resource / ProjectResource, Execution, ResourceClaim, dependency graph descriptors/membership, typed WorkRelations, OwnerDecision provenance, Evidence, and OperationReceipt/event records are present as additive migration 0002. CI validates selected foreign-key behaviors, unique-index behavior, RLS table ownership, and selected integrity constraints; schema presence does not mean every composite foreign key has been independently exercised. This does not implement the Stage 2 transaction protocols.
+**Stage 1B — minimum coordination data model implemented and schema-tested in PR #9.** Physical Resource / ProjectResource, Execution, ResourceClaim, dependency graph descriptors/membership, typed WorkRelations, OwnerDecision provenance, Evidence, and OperationReceipt/event records are present as additive migration 0002. CI validates per-Work attempt_no and fence uniqueness with targeted terminal-Execution probes, the exact active ResourceClaim conflict, each of the three composite ResourceClaim foreign keys with a distinct negative test, selected RLS/table-ownership properties, and other integrity constraints. These are tested schema slices, not the Stage 2 transaction protocols. This does not implement the Stage 2 transaction protocols.
 
 ### Historical CI evidence — not final candidate evidence
 
 - Run #24 ([45734761932](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45734761932)) passed for historical SHA `d055fc1d6fbc7f83d83e35a43fefd6d89a90db43`.
 - Run #27 ([45735069544](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45735069544)) passed for the review SHA `5648ce0de9e3d9bd6460645819d75bffb35dd772`.
 - Both runs are retained as historical evidence only. Neither identifies the final post-remediation candidate.
-- **Final integrated candidate SHA:** `de713207ebabcd20efe84df912f781985f6156fb`.
-- **Final exact-SHA CI run:** [Run #31 — success](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45756309441), with Repository contract validation and PostgreSQL 17.12 integration jobs both passing.
+- **Final integrated candidate SHA:** `4b241ff7a9ae76db7780133e23f6ee1371344bf5` (tree `fbad3219ae197246e588a2d571e511b48c3233c9`).
+- **Final exact-SHA CI run:** [Run #32 — success](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45756670349), with Repository contract validation and PostgreSQL 17.12 integration jobs both passing. Run #31 is historical for its earlier SHA.
 - **T01:** PASS — PostgreSQL log states `two sessions reached a DB rendezvous before one canonical Work was committed`.
 
-PR #9 remains open and unmerged. The prior review findings have been remediated in the integrated candidate; refreshed independent final acceptance remains pending. CI success is not Owner acceptance.
+PR #9 remains open and unmerged. The bounded final integration acceptance returned CHANGES_REQUIRED solely because the repository evidence pointers were stale; this follow-up synchronizes the affected records. CI success is not Owner acceptance, and no production readiness is claimed.
 
 ## Architecture-to-implementation stage crosswalk
 
@@ -39,9 +39,9 @@ Implementation Stage 2 also contains the dependency mutation and DAG safety prot
 
 | Stage | Scope | Exit evidence | Current state |
 |---|---|---|---|
-| 0 | Repository governance, architecture baseline, decision register, migration/test conventions, CI | PR merged after independent review; CI on exact head; fresh-session entry succeeds | IMPLEMENTED IN PR #9; REVIEW / MERGE PENDING |
+| 0 | Repository governance, architecture baseline, decision register, migration/test conventions, CI | PR merged after independent review; CI on exact head; fresh-session entry succeeds | IMPLEMENTED IN PR #9; EXACT-HEAD CI VERIFIED; FINAL ACCEPTANCE / MERGE BLOCKED ONLY ON DOC EVIDENCE SYNC |
 | 1A | Project, canonical Work, exact active identity, ExternalRef, request idempotency, register-or-link | T01–T03, T21 mapping slice, clean migration | IMPLEMENTED; EXACT-SHA CI VERIFIED |
-| 1B | Physical Resource, ProjectResource, Execution, ResourceClaim, relation graph, OwnerDecision, Evidence, OperationReceipt | Clean migration, FK/unique/check constraints, owner/RLS object checks | IMPLEMENTED; SCHEMA TESTS VERIFIED; REVIEW PENDING |
+| 1B | Physical Resource, ProjectResource, Execution, ResourceClaim, relation graph, OwnerDecision, Evidence, OperationReceipt | Clean migration, FK/unique/check constraints, owner/RLS object checks | IMPLEMENTED; SCHEMA TESTS AND EXACT-HEAD CI VERIFIED; FINAL ACCEPTANCE / MERGE BLOCKED ONLY ON DOC EVIDENCE SYNC |
 | 2 | Atomic claim, resource reservation, lease/fencing, dependency mutation and DAG safety | Adversarial multi-connection and fault tests T04–T10 | NOT STARTED |
 | 3 | GitHub/Actions adapter, per-attempt refs, receipts and reconciliation, exact-SHA lifecycle | Adapter contract tests and stale external side-effect reconciliation T12–T15/T21/T22 | NOT STARTED |
 | 4 | Session recovery, authorized Context Compiler, evidence-derived memory, bounded discovery | Fresh-session E2E and empty-queue discovery T10/T11/T19/T20/T25 | NOT STARTED |
