@@ -27,13 +27,25 @@ The initial Stage 2A candidate at HEAD `285dbc092744cb5d0f88ab391e25a84257298919
 
 The Stage 1A/1B integrated baseline is merged through [PR #9](https://github.com/Love-DC/recursive-engineering-platform/pull/9). Its post-merge evidence, including disposable PostgreSQL 17.12 scope, remains in the [canonical evidence record](https://github.com/Love-DC/recursive-engineering-platform/pull/9#issuecomment-7183275628).
 
+## Stage 3 — GitHub delivery and reconciliation prototype
+
+Stage 3 is implemented additively in migrations:
+- `0007_stage3_github_delivery_reconciliation.sql`: adapter capability manifests; one delivery identity per Execution; deterministic `work/<work_id>/execution/<execution_id>` branch; per-Execution PR identity; exact-SHA evidence; append-only evidence invalidation.
+- `0008_stage3_external_receipt_reconciliation.sql`: persist provider receipts separately from reconciliation; resolve ambiguous outcomes from provider observations; permit retry only after authoritative not-found while the Execution remains current; stale outcomes are recorded instead of replayed.
+
+The session adapter capability manifest is `adapters/github-session-tools.json`. Branch/ref, PR, Process Review COMMENT, Native GitHub APPROVE, merge, CI lookup, and post-merge verification are declared supported by the connected session-tool surface. Process Review records the same authenticated principal; separate ChatGPT sessions are not separate GitHub users. Native APPROVE is a real GitHub review action as the connected principal, but an independently authenticated approver is unavailable. Deployment is explicitly unsupported.
+
+`aep_delivery/adapter.py` contains the contract parser and a deterministic Fake GitHub Provider. The fake can commit an external side effect and then drop the response; tests must query provider state before retrying. The database never calls GitHub and never treats its fence as revoking shared credentials. Stale merges are reconciled as actual external facts, marked stale, and invalidate affected old exact-HEAD evidence.
+
+The Stage 3 PostgreSQL 17.12 test runner is `scripts/test_stage3_delivery_protocol.py` and covers T12, T13, T14, T15, T21, and T22. Candidate [PR #49](https://github.com/Love-DC/recursive-engineering-platform/pull/49) HEAD `f2766ba9345bf6221618fc48db93e30f2a5db403` / tree `ce0336dfdd2576ab1176b7791722c9c1d5b54041` passed exact-head [Run #92](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45891410042). Independent review is pending; PR #49 remains Draft and unmerged.
+
 ## What these tests do not prove
 
 - Stage 2B atomic dependency-edge mutation, DAG cycle prevention, graph-wide concurrency, shared/cross-project dependency authorization, or READY invalidation after dependency/authority changes.
 - Path-overlap or normalized write-set conflict semantics; current resource exclusion is conservative exact whole-repository/branch-ref exclusion.
 - Populated-database migration upgrade/preflight safety.
 - A production Supabase deployment, production write API, authenticated caller-to-project binding, or hostile multi-tenant authorization.
-- GitHub adapter execution, external operation receipts/reconciliation, stale external side-effect prevention, or legacy RAE cutover.
+- Live GitHub provider execution by a runtime service, production-grade authenticated caller/project binding, actual branch-protection approval by an independent principal, deployment, or legacy RAE cutover. Stage 3 CI validates protocol behavior using a controllable provider fake; it does not deploy or write to GitHub.
 - An always-on LLM runtime or proof that an expired ChatGPT session has stopped acting.
 
 ## Security and deployment limitations
