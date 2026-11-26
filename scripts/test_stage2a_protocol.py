@@ -641,7 +641,7 @@ def main() -> None:
     expect_error(
         "INSERT INTO aep.project_resources(project_id,resource_id,access_mode) VALUES("
         f"{lit(project_a)}::uuid,{lit(invalid_resource)}::uuid,'write');",
-        "project_resources_active_write_requires_approved_grant_ck",
+        "Active write ProjectResource requires an approved, correctly-scoped OwnerDecision",
         "unapproved ProjectResource write grant",
     )
     invalid_work = ready_work(project_a, "invalid-requirement-contract")
