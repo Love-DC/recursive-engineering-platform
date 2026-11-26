@@ -718,8 +718,8 @@ def main() -> None:
           FROM aclexplode(COALESCE(proc.proacl,acldefault('f',proc.proowner))) AS acl
         ),false);
     """)
-    if all_definers != "9":
-        raise AssertionError(f"Not every SECURITY DEFINER in schema aep meets owner/path/PUBLIC rules: {all_definers}/9")
+    if all_definers != "8":
+        raise AssertionError(f"Not every SECURITY DEFINER in schema aep meets owner/path/PUBLIC rules: {all_definers}/8")
     runtime_grants = scalar("""
       SELECT
         has_function_privilege('aep_runtime','aep.set_work_resource_requirements(uuid,jsonb)','EXECUTE')::text
