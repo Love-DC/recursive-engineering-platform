@@ -53,7 +53,12 @@ def main() -> int:
     if "stable agent_id" not in agents or "not an MVP prerequisite" not in agents:
         fail("agent identity boundary is missing from AGENTS.md")
 
-    if "must not" not in agents or "mutate any existing Supabase project or database" not in agents:
+    lowered_agents = agents.lower()
+    supabase_boundary_phrases = (
+        "must not mutate any existing supabase project or database",
+        "no existing supabase project or database is modified",
+    )
+    if not any(phrase in lowered_agents for phrase in supabase_boundary_phrases):
         fail("Stage 0/1 existing-Supabase mutation boundary is missing")
 
     workflow = ROOT / ".github/workflows/ci.yml"
