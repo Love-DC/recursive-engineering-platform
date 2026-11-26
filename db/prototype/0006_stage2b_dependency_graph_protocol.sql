@@ -537,6 +537,17 @@ BEGIN
       USING ERRCODE = '22023';
   END IF;
 
+  -- Global lock order begins with the member Project UPDATE, then graph,
+  -- then affected Work rows. Claims take Project SHARE before graph SHARE.
+  SELECT project_row.status INTO v_project_status
+  FROM aep.projects AS project_row
+  WHERE project_row.project_id = p_project_id
+  FOR UPDATE;
+  IF NOT FOUND OR v_project_status <> 'active' THEN
+    RAISE EXCEPTION 'Shared graph member project must be active'
+      USING ERRCODE = '55000';
+  END IF;
+
   SELECT graph_row.* INTO v_graph
   FROM aep.dependency_graphs AS graph_row
   WHERE graph_row.graph_id = p_graph_id
@@ -548,15 +559,6 @@ BEGIN
   END IF;
   IF p_project_id = v_graph.owner_project_id THEN
     RAISE EXCEPTION 'Shared graph owner membership is immutable'
-      USING ERRCODE = '55000';
-  END IF;
-
-  SELECT project_row.status INTO v_project_status
-  FROM aep.projects AS project_row
-  WHERE project_row.project_id = p_project_id
-  FOR UPDATE;
-  IF NOT FOUND OR v_project_status <> 'active' THEN
-    RAISE EXCEPTION 'Shared graph member project must be active'
       USING ERRCODE = '55000';
   END IF;
 
@@ -1041,6 +1043,7 @@ DECLARE
   v_fence bigint;
   v_lease_until timestamptz;
   v_work_version bigint;
+  v_project_id uuid;
   v_graph_ids uuid[];
   v_current_graph_ids uuid[];
 BEGIN
@@ -1052,6 +1055,24 @@ BEGIN
       USING ERRCODE = '22023';
   END IF;
 
+  SELECT work_row.project_id INTO v_project_id
+  FROM aep.works AS work_row
+  WHERE work_row.work_id = p_work_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Work does not exist' USING ERRCODE = '23503';
+  END IF;
+
+  -- Global lock order: Project SHARE -> DependencyGraph SHARE -> Work UPDATE.
+  SELECT project_row.status INTO v_project_status
+  FROM aep.projects AS project_row
+  WHERE project_row.project_id = v_project_id
+  FOR SHARE;
+
+  IF NOT FOUND OR v_project_status <> 'active' THEN
+    RAISE EXCEPTION 'Work project is not active' USING ERRCODE = '55000';
+  END IF;
+
   v_graph_ids := aep.lock_work_dependency_graphs(p_work_id, 'share');
 
   SELECT work_row.* INTO v_work
@@ -1059,23 +1080,15 @@ BEGIN
   WHERE work_row.work_id = p_work_id
   FOR UPDATE;
 
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'Work does not exist' USING ERRCODE = '23503';
+  IF NOT FOUND OR v_work.project_id IS DISTINCT FROM v_project_id THEN
+    RAISE EXCEPTION 'Work project changed while acquiring dependency locks; retry'
+      USING ERRCODE = '40001';
   END IF;
 
   v_current_graph_ids := aep.current_work_dependency_graphs(p_work_id);
   IF v_current_graph_ids IS DISTINCT FROM v_graph_ids THEN
     RAISE EXCEPTION 'Work dependency graph membership changed; retry the transaction'
       USING ERRCODE = '40001';
-  END IF;
-
-  SELECT project_row.status INTO v_project_status
-  FROM aep.projects AS project_row
-  WHERE project_row.project_id = v_work.project_id
-  FOR SHARE;
-
-  IF NOT FOUND OR v_project_status <> 'active' THEN
-    RAISE EXCEPTION 'Work project is not active' USING ERRCODE = '55000';
   END IF;
 
   -- READY is a projection. The graph SHARE locks above are the same
@@ -1305,6 +1318,7 @@ DECLARE
   v_work_version bigint;
   v_expected_claims bigint;
   v_active_claims bigint;
+  v_project_id uuid;
   v_graph_ids uuid[];
   v_current_graph_ids uuid[];
 BEGIN
@@ -1318,6 +1332,24 @@ BEGIN
       USING ERRCODE = '22023';
   END IF;
 
+  SELECT work_row.project_id INTO v_project_id
+  FROM aep.works AS work_row
+  WHERE work_row.work_id = p_work_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Work does not exist' USING ERRCODE = '23503';
+  END IF;
+
+  -- Global lock order: Project SHARE -> DependencyGraph SHARE -> Work UPDATE.
+  PERFORM 1
+  FROM aep.projects AS project_row
+  WHERE project_row.project_id = v_project_id
+  FOR SHARE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Work project does not exist' USING ERRCODE = '23503';
+  END IF;
+
   v_graph_ids := aep.lock_work_dependency_graphs(p_work_id, 'share');
 
   SELECT work_row.* INTO v_work
@@ -1325,8 +1357,9 @@ BEGIN
   WHERE work_row.work_id = p_work_id
   FOR UPDATE;
 
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'Work does not exist' USING ERRCODE = '23503';
+  IF NOT FOUND OR v_work.project_id IS DISTINCT FROM v_project_id THEN
+    RAISE EXCEPTION 'Work project changed while acquiring dependency locks; retry'
+      USING ERRCODE = '40001';
   END IF;
 
   v_current_graph_ids := aep.current_work_dependency_graphs(p_work_id);
