@@ -64,6 +64,7 @@ All migrations under `db/prototype` (0001–0008 at this baseline) run only agai
 
 ## Current prototype limits and Stage 4 scope
 
+- The Stage 0/1 prototype must not mutate any existing Supabase project or database; the legacy RAE database remains untouched.
 - Stage 4 has not yet been implemented: fresh-session recovery (T10/T11), authorized Context Compiler and source-pinned Context Packs, evidence-derived/rebuildable memory (T25), and A0 bounded discovery/decomposition (T19/T20) remain outstanding.
 - T06 remains PARTIAL: exclusion is conservative at whole-repository/branch-ref granularity; path-overlap/narrower write-set exclusion is not implemented.
 - T16 remains PARTIAL for actual Owner event verification/supersede enforcement. T17/T18 remain PARTIAL for authenticated production project authorization, cross-project retrieval isolation, and a complete production role/security audit. T24 remains PARTIAL for versioned transition/replay protocol.
