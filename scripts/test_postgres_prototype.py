@@ -464,14 +464,14 @@ def main() -> None:
         "approval_source_kind,approval_source_ref,approver_principal,approval_provenance,approved_at) "
         "VALUES('project','prototype','single-approval','Approved v1',1,'approved',"
         "'direct_owner_message','test://owner-approval','test-owner',"
-        "'{""direct_owner_confirmation"":true}'::jsonb,now());"
+        "jsonb_build_object('direct_owner_confirmation',true),now());"
     )
     expect_constraint(
         "INSERT INTO aep.owner_decisions(scope_type,scope_key,decision_key,statement,decision_version,status,"
         "approval_source_kind,approval_source_ref,approver_principal,approval_provenance,approved_at) "
         "VALUES('project','prototype','single-approval','Approved v2',2,'approved',"
         "'direct_owner_message','test://owner-approval-v2','test-owner',"
-        "'{""direct_owner_confirmation"":true}'::jsonb,now());",
+        "jsonb_build_object('direct_owner_confirmation',true),now());",
         "owner_decisions_one_current_approval_uq",
         "One current OwnerDecision approval per scoped decision",
     )
@@ -619,7 +619,7 @@ def main() -> None:
     )
     expect_constraint(
         "INSERT INTO aep.resource_claims(project_id,resource_id,work_id,execution_id,resource_ref,write_set_kind,conflict_key,status,lease_until,fence) "
-        f"VALUES({lit(project2)}::uuid,{lit(resource_id)}::uuid,{lit(work_two)}::uuid,{lit(execution_two)}::uuid,'refs/heads/path-set','path_set','path:/src','active',now()+interval '5 minutes',1);",
+        f"VALUES({lit(project2)}::uuid,{lit(resource_id)}::uuid,{lit(work_two)}::uuid,{lit(execution_two)}::uuid,'refs/heads/main','path_set','path:/src','active',now()+interval '5 minutes',1);",
         "resource_claims_active_requires_repository_ref_ck",
         "Active path_set claims are rejected until overlap locking exists",
     )
