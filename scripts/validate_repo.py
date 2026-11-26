@@ -53,8 +53,8 @@ def main() -> int:
     if "stable agent_id" not in agents or "not an MVP prerequisite" not in agents:
         fail("agent identity boundary is missing from AGENTS.md")
 
-    if "No Supabase schema changes or production integration in Stage 0." not in agents:
-        fail("Stage 0 Supabase/production boundary is missing")
+    if "mutate any Supabase project or database" not in agents:
+        fail("Stage 0 Supabase mutation boundary is missing")
 
     workflow = ROOT / ".github/workflows/ci.yml"
     if not workflow.is_file():
