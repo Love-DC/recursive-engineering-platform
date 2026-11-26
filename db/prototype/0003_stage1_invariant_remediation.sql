@@ -35,7 +35,7 @@ AS $function$
        SELECT 1
        FROM unnest(string_to_array(p_host, '.')) AS part(label)
        WHERE length(part.label) NOT BETWEEN 1 AND 63
-          OR part.label !~ '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'
+          OR (part.label COLLATE "C") !~ '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'
      )
 $function$;
 
@@ -58,14 +58,14 @@ ALTER TABLE aep.resources
   ADD CONSTRAINT resources_provider_canonical_ck
     CHECK (
       provider = lower(provider)
-      AND provider ~ '^[a-z0-9][a-z0-9._-]{0,79}$'
+      AND (provider COLLATE "C") ~ '^[a-z0-9][a-z0-9._-]{0,79}$'
     ),
   ADD CONSTRAINT resources_host_canonical_ck
     CHECK (aep.is_canonical_resource_host(host)),
   ADD CONSTRAINT resources_type_canonical_ck
     CHECK (
       resource_type = lower(resource_type)
-      AND resource_type ~ '^[a-z0-9][a-z0-9._-]{0,79}$'
+      AND (resource_type COLLATE "C") ~ '^[a-z0-9][a-z0-9._-]{0,79}$'
     ),
   ADD CONSTRAINT resources_canonical_key_matches_identity_ck
     CHECK (canonical_key = resource_type || ':' || stable_resource_id);

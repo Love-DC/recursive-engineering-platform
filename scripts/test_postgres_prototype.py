@@ -87,6 +87,11 @@ def main() -> None:
 
     psql("DROP DATABASE IF EXISTS aep_test WITH (FORCE);", db="postgres")
     psql("CREATE DATABASE aep_test;", db="postgres")
+    env_info = scalar(
+        "SELECT current_setting('server_version') || '; LC_COLLATE=' || datcollate "
+        "|| '; LC_CTYPE=' || datctype FROM pg_database WHERE datname=current_database();"
+    )
+    print(f"INFO PostgreSQL integration environment: {env_info}")
     for path in migrations:
         psql(file=path)
     project_id = scalar(
@@ -436,6 +441,24 @@ def main() -> None:
         "VALUES('github','github.com','Repository','case-type','Repository:case-type');",
         "resources_type_canonical_ck",
         "Resource type canonical form",
+    )
+    expect_constraint(
+        "INSERT INTO aep.resources(provider,host,resource_type,stable_resource_id,canonical_key) "
+        "VALUES('githubé','github.com','repository','non-ascii-provider','repository:non-ascii-provider');",
+        "resources_provider_canonical_ck",
+        "Non-ASCII Resource provider is rejected by its named canonical constraint",
+    )
+    expect_constraint(
+        "INSERT INTO aep.resources(provider,host,resource_type,stable_resource_id,canonical_key) "
+        "VALUES('github','github.com','repositoryé','non-ascii-type','repositoryé:non-ascii-type');",
+        "resources_type_canonical_ck",
+        "Non-ASCII Resource type is rejected by its named canonical constraint",
+    )
+    expect_constraint(
+        "INSERT INTO aep.resources(provider,host,resource_type,stable_resource_id,canonical_key) "
+        "VALUES('github','githubé.com','repository','non-ascii-host','repository:non-ascii-host');",
+        "resources_host_canonical_ck",
+        "Non-ASCII Resource host label is rejected by its named canonical constraint",
     )
     expect_constraint(
         "INSERT INTO aep.resources(provider,host,resource_type,stable_resource_id,canonical_key) "
