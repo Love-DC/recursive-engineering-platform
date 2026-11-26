@@ -142,7 +142,7 @@ def setup_project(manifest: dict) -> tuple[str, str, str, str, str, str]:
     return project_id, resource_id, repository_id, read_resource_id, decision_id, observation_decision_id
 
 
-def create_running_work(project_id: str, session_id: str) -> tuple[str, str, int]:
+def create_running_work(project_id: str, session_id: str) -> tuple[str, str, int, str, list[str]]:
     work_id = scalar(
         "SELECT work_id::text FROM aep.register_work("
         f"{lit(project_id)}::uuid,{lit('stage4-request-'+str(uuid4()))},"
@@ -186,7 +186,7 @@ def create_running_work(project_id: str, session_id: str) -> tuple[str, str, int
         f"{lit(work_id)}::uuid,{lit(session_id)}::uuid,600);"
     )
     execution_id, fence = claimed.split("|")
-    return work_id, execution_id, int(fence)
+    return work_id, execution_id, int(fence), graph_id, dependency_ids
 
 
 def checkpoint(
@@ -216,10 +216,10 @@ def recover(
 def test_recovery_without_prior_session_context(
     project_id: str, resource_id: str, repository_id: str,
     read_resource_id: str, owner_decision_id: str, observation_decision_id: str, manifest: dict,
-) -> tuple[str, str, int, str, str, str]:
+) -> tuple[str, str, int, str, str, str, str, str, str, list[str]]:
     session_a = str(uuid4())
     session_b = str(uuid4())
-    work_id, execution_a, fence_a = create_running_work(project_id, session_a)
+    work_id, execution_a, fence_a, graph_id, dependency_ids = create_running_work(project_id, session_a)
 
     delivery = json.loads(scalar(
         "SELECT aep.allocate_execution_delivery("
@@ -358,11 +358,17 @@ def test_recovery_without_prior_session_context(
         row for row in snapshot["dependencies"]
         if row["source_work_id"] == work_id and row["relation_type"] == "depends_on"
     ]
-    if len(root_dependencies) != 2 or any(
-        row["dependency_graph_id"] is None or row["target_status"] != "delivered"
-        for row in root_dependencies
+    if (
+        len(root_dependencies) != 2
+        or {row["target_work_id"] for row in root_dependencies} != set(dependency_ids)
+        or any(
+            row["dependency_graph_id"] != graph_id or row["target_status"] != "delivered"
+            for row in root_dependencies
+        )
     ):
-        raise AssertionError("T10 project DAG dependency edges, graph identity or target state were not recovered")
+        raise AssertionError(
+            "T10 dependency projection did not recover the exact default graph and prerequisite Work IDs"
+        )
     if work_row["dependencies_satisfied"] is not True:
         raise AssertionError("T10 recovery did not reconstruct satisfied dependency eligibility")
     if not any(row["resource_id"] == resource_id and row["access_mode"] == "write"
@@ -416,12 +422,15 @@ def test_recovery_without_prior_session_context(
 
     print("PASS T10: fresh session reconstructs Work, dependencies, Execution/fence/lease, delivery, evidence, checkpoints and receipts")
     print("PASS T11: recovery uses only durable PostgreSQL state and requires no prior chat transcript")
-    return work_id, execution_a, fence_a, session_a, session_b, receipt_id
+    return (work_id, execution_a, fence_a, session_a, session_b, receipt_id,
+            branch, pr_sha, graph_id, dependency_ids)
 
 
 def test_expiry_takeover_and_stale_checkpoint(
     project_id: str, work_id: str, execution_a: str, fence_a: int, session_a: str,
     resource_id: str, repository_id: str, original_receipt_id: str,
+    original_delivery_branch: str, original_pr_sha: str,
+    expected_dependency_graph_id: str, expected_dependency_ids: list[str],
 ) -> None:
     psql(
         "UPDATE aep.executions SET lease_until=clock_timestamp()-interval '1 second' "
@@ -523,24 +532,75 @@ def test_expiry_takeover_and_stale_checkpoint(
         raise AssertionError("recovery fabricated a trusted old-session termination observation")
     if new_row["old_session_may_still_be_active"] is not True:
         raise AssertionError("recovery must remain conservative for the current session too")
-    if not any(row["execution_id"] == execution_a for row in snapshot["deliveries"]):
-        raise AssertionError("takeover discarded the prior per-execution delivery record")
-    if not any(row["execution_id"] == execution_b
-               and row["pull_request_number"] == 708 and row["pr_head_sha"] == pr_sha_b
-               for row in snapshot["deliveries"]):
-        raise AssertionError("recovery did not include the new attempt's delivery identity and exact PR head")
-    if not any(row["execution_id"] == execution_b and row["subject_sha"] == pr_sha_b
-               and row["evidence_kind"] == "ci" and row["is_valid"]
-               for row in snapshot["delivery_evidence"]):
-        raise AssertionError("recovery did not include the new attempt's exact-SHA delivery evidence")
-    if not any(row["execution_id"] == execution_a and row["status"] == "uncertain"
-               for row in snapshot["operation_receipts"]):
-        raise AssertionError("takeover discarded an ambiguous old-execution receipt")
-    if not any(row["operation_receipt_id"] == receipt_b
-               and row["execution_id"] == execution_b and row["status"] == "uncertain"
-               and row["reconciliation_status"] == "pending"
-               for row in snapshot["operation_receipts"]):
-        raise AssertionError("recovery did not include the new attempt's ambiguous operation receipt")
+    expected_deliveries = (
+        (execution_a, original_delivery_branch, 707,
+         "https://github.com/Love-DC/recursive-engineering-platform/pull/707", original_pr_sha),
+        (execution_b, delivery_b["delivery_branch"], 708,
+         "https://github.com/Love-DC/recursive-engineering-platform/pull/708", pr_sha_b),
+    )
+    for expected_execution, expected_branch, expected_pr, expected_url, expected_sha in expected_deliveries:
+        delivery_row = next(
+            (row for row in snapshot["deliveries"] if row["execution_id"] == expected_execution),
+            None,
+        )
+        if delivery_row is None or (
+            delivery_row["delivery_branch"], delivery_row["pull_request_number"],
+            delivery_row["pull_request_url"], delivery_row["pr_head_sha"],
+        ) != (expected_branch, expected_pr, expected_url, expected_sha):
+            raise AssertionError(
+                f"takeover recovery lost or changed delivery identity for execution {expected_execution}: "
+                f"{delivery_row}"
+            )
+        if not any(
+            row["execution_id"] == expected_execution and row["subject_sha"] == expected_sha
+            and row["evidence_kind"] == "ci" and row["is_valid"] is True
+            for row in snapshot["delivery_evidence"]
+        ):
+            raise AssertionError(
+                f"takeover recovery lost exact-SHA CI evidence for execution {expected_execution}"
+            )
+
+    expected_receipts = (
+        (original_receipt_id, execution_a), (receipt_b, execution_b),
+    )
+    for expected_receipt_id, expected_execution in expected_receipts:
+        receipt_row = next(
+            (row for row in snapshot["operation_receipts"]
+             if row["operation_receipt_id"] == expected_receipt_id),
+            None,
+        )
+        if receipt_row is None or (
+            receipt_row["execution_id"] != expected_execution
+            or receipt_row["status"] != "uncertain"
+            or receipt_row["reconciliation_status"] != "pending"
+        ):
+            raise AssertionError(
+                f"takeover recovery lost or changed ambiguous receipt {expected_receipt_id}: {receipt_row}"
+            )
+        if not any(
+            row["operation_receipt_id"] == expected_receipt_id
+            and row["event_type"] == "reconciliation_started"
+            for row in snapshot["operation_receipt_events"]
+        ):
+            raise AssertionError(
+                f"takeover recovery lost reconciliation event history for receipt {expected_receipt_id}"
+            )
+
+    recovered_dependencies = [
+        row for row in snapshot["dependencies"]
+        if row["source_work_id"] == work_id and row["relation_type"] == "depends_on"
+    ]
+    if (
+        len(recovered_dependencies) != 2
+        or {row["target_work_id"] for row in recovered_dependencies} != set(expected_dependency_ids)
+        or any(
+            row["dependency_graph_id"] != expected_dependency_graph_id
+            or row["target_status"] != "delivered"
+            for row in recovered_dependencies
+        )
+        or work_row["dependencies_satisfied"] is not True
+    ):
+        raise AssertionError("takeover recovery lost the exact default dependency graph and target Works")
     bounded_snapshot = recover(project_id, str(uuid4()), work_limit=100, related_limit=1)
     bounded_collections = (
         "dependencies", "executions", "work_events", "evidence", "deliveries",
@@ -595,13 +655,17 @@ def main() -> None:
     setup_database()
     (project_id, resource_id, repository_id, read_resource_id,
      owner_decision_id, observation_decision_id) = setup_project(manifest)
-    work_id, execution_a, fence_a, session_a, _session_b, receipt_id = test_recovery_without_prior_session_context(
-        project_id, resource_id, repository_id, read_resource_id,
-        owner_decision_id, observation_decision_id, manifest
+    (work_id, execution_a, fence_a, session_a, _session_b, receipt_id,
+     original_delivery_branch, original_pr_sha, dependency_graph_id, dependency_ids) = (
+        test_recovery_without_prior_session_context(
+            project_id, resource_id, repository_id, read_resource_id,
+            owner_decision_id, observation_decision_id, manifest
+        )
     )
     test_expiry_takeover_and_stale_checkpoint(
         project_id, work_id, execution_a, fence_a, session_a,
-        resource_id, repository_id, receipt_id
+        resource_id, repository_id, receipt_id, original_delivery_branch,
+        original_pr_sha, dependency_graph_id, dependency_ids
     )
     test_authorization_gate_and_limits(project_id)
     print("PASS Stage 4A PostgreSQL 17.12 session recovery prototype: T10, T11")
