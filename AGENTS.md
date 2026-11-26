@@ -9,7 +9,7 @@ This file is the repository-local entry contract for every AI session working in
 3. Read [the accepted architecture baseline](docs/ARCHITECTURE-BASELINE.md).
 4. Read [the decision register](docs/DECISION-REGISTER.md) before changing scope, permissions, deployment, or rollout.
 5. Read [the implementation roadmap](docs/IMPLEMENTATION-ROADMAP.md).
-6. Recover the live task and PR state from [roadmap #2](https://github.com/Love-DC/recursive-engineering-platform/issues/2), [Stage 0 #3](https://github.com/Love-DC/recursive-engineering-platform/issues/3), [Stage 1A #6](https://github.com/Love-DC/recursive-engineering-platform/issues/6), [Stage 1B #8](https://github.com/Love-DC/recursive-engineering-platform/issues/8), and [the integrated delivery PR #9](https://github.com/Love-DC/recursive-engineering-platform/pull/9).
+6. Recover the live task, PR, and CI state from [roadmap #2](https://github.com/Love-DC/recursive-engineering-platform/issues/2), [Stage 2A #10](https://github.com/Love-DC/recursive-engineering-platform/issues/10), [Stage 2B #11](https://github.com/Love-DC/recursive-engineering-platform/issues/11), [Stage 2A PR #38](https://github.com/Love-DC/recursive-engineering-platform/pull/38), and [Stage 2B PR #43](https://github.com/Love-DC/recursive-engineering-platform/pull/43).
 
 The authoritative design source is [Architecture RFC #1, Current Design Snapshot v2.0](https://github.com/Love-DC/recursive-engineering-platform/issues/1#issuecomment-7161657103). Repository documents summarize it; they must not silently weaken or expand it.
 
@@ -53,19 +53,19 @@ An Owner-approved architecture baseline does not implicitly approve unresolved d
 
 ## Current implementation boundary
 
-Stage 0 foundation and Stage 1A/1B schema prototype are combined in PR #9. The database is created only in disposable GitHub Actions PostgreSQL 17.12 jobs.
+- Stage 0, Stage 1A, and Stage 1B are merged to `main` through PR #9.
+- Stage 2A claim, lease/takeover, fencing, resource reservation, and claim-time eligibility are merged through PR #38. Post-merge Run #72 passed; T04/T05 are PASS and T06 remains PARTIAL because exclusion is whole-repository/branch-ref scoped, not path-overlap scoped.
+- Stage 2B dependency graph membership, authorization checks, atomic DAG mutation, cycle prevention, graph-wide serialization, READY invalidation, and required/optional parent-child completion are merged through PR #43. Independent focused remediation confirmation passed; exact source-head Run #85 and post-merge Run #86 passed. T07/T08/T09/T23 are PASS for the tested PostgreSQL 17.12 prototype scope.
+- All database migrations under `db/prototype` run only against disposable GitHub Actions PostgreSQL 17.12. They are not Supabase deployment migrations or a production schema.
 
-Stage 1 prototype limitations:
-- no existing Supabase project or database is modified;
-- no old RAE repository or database is modified;
-- no production credentials or production write gateway;
-- no pilot repository selection or legacy cutover;
-- no always-on LLM runtime;
-- no authenticated project authorization protocol;
-- no atomic claim/lease/fence transition functions;
-- no atomic dependency graph mutation or cycle-prevention protocol;
-- no path-overlap resource locking or GitHub operation reconciliation implementation.
+The current prototype still has explicit limits:
+- no existing Supabase project or legacy RAE database is modified;
+- no production coordination write path or production credentials;
+- no pilot registration, task import, or legacy cutover;
+- no always-on LLM runtime; operation remains A0 session-triggered;
+- authenticated production project authorization and cross-project retrieval isolation are not complete;
+- path-overlap/narrower write-set resource exclusion is not implemented (T06 PARTIAL);
+- GitHub delivery adapter, per-execution delivery lifecycle, external-operation receipt reconciliation, and stale-side-effect reconciliation are not implemented (Stage 3);
+- fresh-session recovery, Context Compiler, bounded discovery, and evidence-derived memory are not implemented (Stage 4).
 
-The registration function accepts project_id as routing input only. The Stage 1B schema's grant, execution, relation, evidence, and receipt records are data structures; they do not imply that the related enforcement protocols are complete.
-
-Do not advance a stage merely because its documentation or tables exist. Use the acceptance criteria and evidence required by the roadmap.
+Do not advance a stage merely because its documentation or tables exist. Use the acceptance criteria and exact-SHA evidence required by the roadmap. Deployment, pilot selection, and legacy cutover remain separately gated by the Decision Register.
