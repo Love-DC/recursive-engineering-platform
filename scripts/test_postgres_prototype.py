@@ -308,7 +308,7 @@ def main() -> None:
     )
     if direct_padded.returncode == 0:
         raise AssertionError("Direct Work insert bypassed canonical identity input constraints")
-    print("PASS T04: Work identity v1 rejects edge whitespace and preserves exact case and Unicode NFC/NFD text")
+    print("PASS Stage 1 identity invariants: edge whitespace rejected; exact case and Unicode NFC/NFD text preserved")
 
     external = {
         "provider":"github","host":"github.com","resource_key":"repo:1471589776",
