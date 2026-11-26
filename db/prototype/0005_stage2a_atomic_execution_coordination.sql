@@ -230,6 +230,21 @@ SECURITY DEFINER
 SET search_path = pg_catalog, aep
 AS $function$
 BEGIN
+  -- A Resource ID is a durable authorization/conflict identity. Retargeting
+  -- it would silently carry existing ProjectResource grants and requirements
+  -- to a different physical repository. Create a new resource_id instead.
+  IF TG_OP = 'UPDATE'
+     AND (
+       NEW.provider IS DISTINCT FROM OLD.provider
+       OR NEW.host IS DISTINCT FROM OLD.host
+       OR NEW.resource_type IS DISTINCT FROM OLD.resource_type
+       OR NEW.stable_resource_id IS DISTINCT FROM OLD.stable_resource_id
+       OR NEW.canonical_key IS DISTINCT FROM OLD.canonical_key
+     ) THEN
+    RAISE EXCEPTION 'Physical Resource identity fields are immutable; create a new resource_id'
+      USING ERRCODE = '55000';
+  END IF;
+
   IF TG_OP = 'DELETE' THEN
     IF EXISTS (
       SELECT 1 FROM aep.resource_claims AS claim
@@ -340,12 +355,13 @@ BEGIN
 END
 $function$;
 
--- Lock order shared by every protocol operation:
---   Work -> (project) -> physical Resources sorted by resource_id
---   -> ProjectResources sorted by resource_id -> OwnerDecisions
---   -> Execution -> ResourceClaims.
--- Requirements are stable while the Work row is locked. Resource row locks
--- serialize aliases of the same physical resource across different projects.
+-- Claim lock sequence:
+--   Work -> project -> (current Execution, optional Work OwnerDecision)
+--   -> physical Resources sorted by resource_id
+--   -> ProjectResources sorted by resource_id -> grant OwnerDecisions
+--   -> Execution and ResourceClaim writes.
+-- Dependency eligibility is read in this transaction; atomic graph mutation,
+-- cross-project sharing authorization, and graph-wide locks are Stage 2B.
 CREATE FUNCTION aep.claim_work(
   p_work_id uuid,
   p_session_id uuid,
@@ -407,6 +423,39 @@ BEGIN
     RAISE EXCEPTION 'Work project is not active' USING ERRCODE = '55000';
   END IF;
 
+  -- READY is a cached projection. Re-check every active prerequisite in the
+  -- same claim transaction. Stage 2A deliberately accepts only an active,
+  -- same-project graph owned by this project; shared/cross-project graph
+  -- authorization and graph mutation coordination remain Stage 2B work.
+  IF EXISTS (
+    SELECT 1
+    FROM aep.work_relations AS relation_row
+    LEFT JOIN aep.works AS prerequisite
+      ON prerequisite.work_id = relation_row.target_work_id
+    LEFT JOIN aep.dependency_graphs AS graph_row
+      ON graph_row.graph_id = relation_row.dependency_graph_id
+    WHERE relation_row.source_work_id = p_work_id
+      AND relation_row.relation_type = 'depends_on'
+      AND relation_row.status = 'active'
+      AND (
+        prerequisite.status IS DISTINCT FROM 'delivered'
+        OR prerequisite.project_id IS DISTINCT FROM v_work.project_id
+        OR graph_row.status IS DISTINCT FROM 'active'
+        OR graph_row.graph_scope IS DISTINCT FROM 'project'
+        OR graph_row.owner_project_id IS DISTINCT FROM v_work.project_id
+        OR NOT EXISTS (
+          SELECT 1
+          FROM aep.dependency_graph_members AS member_row
+          WHERE member_row.graph_id = relation_row.dependency_graph_id
+            AND member_row.project_id = v_work.project_id
+            AND member_row.access_mode = 'owner'
+        )
+      )
+  ) THEN
+    RAISE EXCEPTION 'Work has an incomplete prerequisite or an inactive/unauthorized dependency graph'
+      USING ERRCODE = '55000';
+  END IF;
+
   IF v_work.status = 'running' THEN
     IF v_work.current_execution_id IS NULL THEN
       RAISE EXCEPTION 'Running Work has no current execution pointer'
@@ -465,8 +514,11 @@ BEGIN
     WHERE resource_row.resource_id = v_resource_id
     FOR UPDATE;
 
-    IF NOT FOUND OR v_resource.status <> 'active' THEN
-      RAISE EXCEPTION 'Required physical Resource is missing or inactive'
+    IF NOT FOUND
+       OR v_resource.status <> 'active'
+       OR v_resource.provider IS DISTINCT FROM 'github'
+       OR v_resource.resource_type IS DISTINCT FROM 'repository' THEN
+      RAISE EXCEPTION 'Required physical Resource is not an active GitHub repository'
         USING ERRCODE = '55000';
     END IF;
   END LOOP;
@@ -477,6 +529,11 @@ BEGIN
     WHERE requirement.work_id = p_work_id
     ORDER BY requirement.resource_id, requirement.resource_ref, requirement.requirement_id
   LOOP
+    IF NOT aep.is_canonical_github_branch_ref(v_requirement.resource_ref) THEN
+      RAISE EXCEPTION 'Required Resource ref is not a canonical GitHub branch ref'
+        USING ERRCODE = '55000';
+    END IF;
+
     SELECT project_resource.* INTO v_project_resource
     FROM aep.project_resources AS project_resource
     WHERE project_resource.project_id = v_work.project_id
