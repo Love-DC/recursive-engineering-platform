@@ -673,6 +673,18 @@ def main() -> None:
         "INSERT INTO aep.resource_claims(project_id,resource_id,work_id,execution_id,resource_ref,write_set_kind,conflict_key,status,lease_until,fence) VALUES "
         f"({lit(project_id)}::uuid,{lit(resource_id)}::uuid,{lit(work_one)}::uuid,{lit(execution_one)}::uuid,'refs/heads/main','repository_ref','*','active',now()+interval '5 minutes',1);"
     )
+    # Git permits a component to end in a dot when the complete ref does not.
+    # Exercise the INSERT trigger, not only the validator function.
+    psql(
+        "INSERT INTO aep.resource_claims(project_id,resource_id,work_id,execution_id,resource_ref,write_set_kind,conflict_key,status,lease_until,fence) VALUES "
+        f"({lit(project_id)}::uuid,{lit(resource_id)}::uuid,{lit(work_one)}::uuid,{lit(execution_one)}::uuid,'refs/heads/foo./bar','repository_ref','*','active',now()+interval '5 minutes',1);"
+    )
+    expect_constraint(
+        "INSERT INTO aep.resource_claims(project_id,resource_id,work_id,execution_id,resource_ref,write_set_kind,conflict_key,status,lease_until,fence) "
+        f"VALUES({lit(project2)}::uuid,{lit(resource_id)}::uuid,{lit(work_two)}::uuid,{lit(execution_two)}::uuid,'refs/heads/foo.','repository_ref','*','active',now()+interval '5 minutes',1);",
+        "resource_claims_github_branch_ref_canonical_ck",
+        "Git rejects a branch ref whose complete ref ends with a dot",
+    )
     # The active fully-qualified branch claim above represents the same physical
     # ref as the shorthand alias "main". The alias cannot create a second
     # reserved/active claim because the database rejects non-canonical refs.

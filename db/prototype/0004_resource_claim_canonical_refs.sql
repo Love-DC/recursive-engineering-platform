@@ -19,6 +19,7 @@ AS $function$
      AND position('//' IN p_resource_ref) = 0
      AND position('..' IN p_resource_ref) = 0
      AND position('@{' IN p_resource_ref) = 0
+     AND right(p_resource_ref, 1) <> '.'
      AND p_resource_ref !~ '[[:cntrl:]]'
      AND NOT EXISTS (
        SELECT 1
@@ -30,7 +31,6 @@ AS $function$
        FROM unnest(string_to_array(p_resource_ref, '/')) AS component(value)
        WHERE component.value = ''
           OR left(component.value, 1) = '.'
-          OR right(component.value, 1) = '.'
           OR right(component.value, 5) = '.lock'
      )
 $function$;
