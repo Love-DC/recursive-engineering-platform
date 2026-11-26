@@ -246,15 +246,13 @@ BEGIN
   END IF;
 
   IF TG_OP = 'DELETE' THEN
-    IF EXISTS (
-      SELECT 1 FROM aep.resource_claims AS claim
-      WHERE claim.resource_id = OLD.resource_id
-        AND claim.status IN ('reserved', 'active')
-    ) THEN
-      RAISE EXCEPTION 'Physical Resource cannot be removed while active claims exist'
-        USING ERRCODE = '55000';
-    END IF;
-    RETURN OLD;
+    -- Resource IDs are permanent authorization/conflict identities. Even
+    -- after every ProjectResource link and claim is removed, deleting this row
+    -- would allow the same UUID to be reinserted for a different physical
+    -- target while old resource-scoped OwnerDecisions still reference its text
+    -- key. Retire with status='archived'; never delete or reuse the identity.
+    RAISE EXCEPTION 'Physical Resource identity is permanent; archive it instead of deleting or reusing resource_id'
+      USING ERRCODE = '55000';
   END IF;
 
   IF NEW.status <> 'active' AND OLD.status = 'active'
