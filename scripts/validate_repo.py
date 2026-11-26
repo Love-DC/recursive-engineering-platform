@@ -53,8 +53,8 @@ def main() -> int:
     if "stable agent_id" not in agents or "not an MVP prerequisite" not in agents:
         fail("agent identity boundary is missing from AGENTS.md")
 
-    if "mutate any Supabase project or database" not in agents:
-        fail("Stage 0 Supabase mutation boundary is missing")
+    if "must not" not in agents or "mutate any existing Supabase project or database" not in agents:
+        fail("Stage 0/1 existing-Supabase mutation boundary is missing")
 
     workflow = ROOT / ".github/workflows/ci.yml"
     if not workflow.is_file():
