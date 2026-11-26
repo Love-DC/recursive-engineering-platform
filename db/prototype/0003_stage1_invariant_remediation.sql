@@ -42,15 +42,19 @@ $function$;
 ALTER FUNCTION aep.is_canonical_resource_host(text) OWNER TO aep_owner;
 REVOKE ALL ON FUNCTION aep.is_canonical_resource_host(text) FROM PUBLIC, aep_runtime;
 
--- Backfill the derived key before constraining it. Provider/host aliases are
--- deliberately rejected rather than silently rewritten because merging two
--- existing physical Resource rows requires an explicit reference migration.
+-- Drop the caller-supplied canonical-key uniqueness before backfilling the
+-- derived projection. Otherwise two pre-migration keys that collapse to the
+-- same derived key could block the repair before the physical tuple is checked.
+-- Provider/host aliases are deliberately rejected rather than silently rewritten
+-- because merging physical Resource rows requires an explicit reference migration.
+ALTER TABLE aep.resources
+  DROP CONSTRAINT resources_provider_host_canonical_key_key;
+
 UPDATE aep.resources
 SET canonical_key = resource_type || ':' || stable_resource_id;
 
 ALTER TABLE aep.resources
   DROP CONSTRAINT resources_provider_host_resource_type_stable_resource_id_key,
-  DROP CONSTRAINT resources_provider_host_canonical_key_key,
   ADD CONSTRAINT resources_provider_canonical_ck
     CHECK (
       provider = lower(provider)
