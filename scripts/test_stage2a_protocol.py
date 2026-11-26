@@ -224,6 +224,91 @@ def parse_claim(result: subprocess.CompletedProcess[str]) -> tuple[str, int, int
     execution_id, attempt, fence, lease_until, work_version = rows[0].split("|", 4)
     return execution_id, int(attempt), int(fence), lease_until, int(work_version)
 
+def test_live_lease_boundary_race(work_id: str, current: tuple[str, int, int, str, int]) -> None:
+    """Renew and attempt takeover while both wait behind a held Work-row lock."""
+    env = os.environ.copy()
+    env["PGPASSWORD"] = PASSWORD
+    cmd = ["psql", "-X", "-q", "-A", "-t", "-v", "ON_ERROR_STOP=1",
+           "-h", HOST, "-p", PORT, "-U", USER, "-d", DATABASE]
+    holder = subprocess.Popen(
+        cmd + ["-c",
+               "BEGIN; "
+               f"SELECT work_id FROM aep.works WHERE work_id={lit(work_id)}::uuid FOR UPDATE; "
+               "SELECT pg_sleep(2.5); COMMIT;"],
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
+    )
+    renew = None
+    takeover = None
+    try:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            sleeping = scalar(
+                "SELECT count(*) FROM pg_stat_activity "
+                "WHERE datname=current_database() AND query LIKE '%pg_sleep(2.5)%' "
+                "AND state='active';"
+            )
+            if sleeping == "1":
+                break
+            if holder.poll() is not None:
+                raise AssertionError("Work lock holder exited before entering its sleep")
+            time.sleep(0.05)
+        else:
+            raise AssertionError("Work lock holder did not acquire the Work row")
+
+        renew_sql = (
+            "SELECT work_version::text FROM aep.renew_execution("
+            f"{lit(work_id)}::uuid,{lit(current[0])}::uuid,{current[2]},"
+            f"{current[4]},60);"
+        )
+        takeover_sql = claim_sql(work_id, str(uuid4()), 60)
+        renew = subprocess.Popen(cmd + ["-c", renew_sql], text=True,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+        takeover = subprocess.Popen(cmd + ["-c", takeover_sql], text=True,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+
+        deadline = time.monotonic() + 10
+        blocked = "0"
+        while time.monotonic() < deadline:
+            blocked = scalar(
+                "SELECT count(*) FROM pg_stat_activity "
+                "WHERE datname=current_database() AND wait_event_type='Lock' "
+                "AND (query LIKE '%renew_execution%' OR query LIKE '%claim_work%');"
+            )
+            if blocked == "2":
+                break
+            if renew.poll() is not None or takeover.poll() is not None:
+                raise AssertionError("lease-boundary contender exited before both were blocked")
+            time.sleep(0.05)
+        if blocked != "2":
+            raise AssertionError(f"expected renewal and takeover to wait on the held Work row; saw {blocked}")
+
+        renew_out, renew_err = renew.communicate(timeout=10)
+        takeover_out, takeover_err = takeover.communicate(timeout=10)
+        if renew.returncode != 0:
+            raise AssertionError(f"pre-expiry renewal failed: {renew_err}")
+        if takeover.returncode == 0 or "live execution lease" not in takeover_err:
+            raise AssertionError(
+                f"claim crossed a still-live lease after waiting on Work lock: {takeover_out}/{takeover_err}"
+            )
+        new_version = int(renew_out.strip())
+        state = scalar(
+            "SELECT status || '|' || current_execution_id::text || '|' "
+            "|| fence_generation::text || '|' || version::text "
+            f"FROM aep.works WHERE work_id={lit(work_id)}::uuid;"
+        )
+        if state != f"running|{current[0]}|{current[2]}|{new_version}":
+            raise AssertionError(f"renew/takeover boundary race produced incoherent Work state: {state}")
+        print("PASS lease boundary: Work-row serialization lets renewal win before expiry; takeover is rejected")
+    finally:
+        if holder.poll() is None:
+            holder.terminate()
+        holder.communicate(timeout=5)
+        for proc in (renew, takeover):
+            if proc is not None and proc.poll() is None:
+                proc.terminate()
+                proc.communicate(timeout=5)
+
+
 
 def main() -> None:
     migration_paths = sorted(MIGRATIONS.glob("*.sql"))
@@ -278,6 +363,12 @@ def main() -> None:
     if t04_state != f"running|{t04_claim[0]}|1|1":
         raise AssertionError(f"T04 Work/current execution/fence projection is incoherent: {t04_state}")
     print("PASS T04: two independent PostgreSQL connections produced exactly one current execution")
+
+    # A renewal and takeover both queue behind a Work-row lock. Before the lease
+    # expiry, the renewal may extend it but the takeover must never steal it.
+    boundary_work = ready_work(project_a, "lease-boundary-race")
+    boundary_claim = parse_claim(psql(claim_sql(boundary_work, str(uuid4()), 30)))
+    test_live_lease_boundary_race(boundary_work, boundary_claim)
 
     # Under SERIALIZABLE, a stale-snapshot worker aborts with 40001. Retry a whole
     # new transaction; it must observe the single committed current owner.
@@ -577,11 +668,30 @@ def main() -> None:
     """)
     if security != "7":
         raise AssertionError(f"SECURITY DEFINER owner/search_path/PUBLIC audit failed: {security}/7")
+    all_definers = scalar("""
+      SELECT count(*) FROM pg_proc AS proc
+      JOIN pg_namespace AS ns ON ns.oid=proc.pronamespace
+      JOIN pg_roles AS owner_role ON owner_role.oid=proc.proowner
+      WHERE ns.nspname='aep' AND proc.prosecdef
+        AND owner_role.rolname='aep_owner'
+        AND NOT owner_role.rolsuper AND NOT owner_role.rolbypassrls
+        AND replace(array_to_string(proc.proconfig,','),' ','')='search_path=pg_catalog,aep'
+        AND NOT COALESCE((
+          SELECT bool_or(acl.grantee=0 AND acl.privilege_type='EXECUTE')
+          FROM aclexplode(COALESCE(proc.proacl,acldefault('f',proc.proowner))) AS acl
+        ),false);
+    """)
+    if all_definers != "8":
+        raise AssertionError(f"Not every SECURITY DEFINER in schema aep meets owner/path/PUBLIC rules: {all_definers}/8")
     runtime_grants = scalar("""
       SELECT
         has_function_privilege('aep_runtime','aep.claim_work(uuid,uuid,integer)','EXECUTE')::text
         || '|' || has_function_privilege('aep_runtime','aep.renew_execution(uuid,uuid,bigint,bigint,integer)','EXECUTE')::text
         || '|' || has_function_privilege('aep_runtime','aep.finish_execution(uuid,uuid,bigint,bigint,text,jsonb)','EXECUTE')::text
+        || '|' || has_function_privilege('aep_runtime','aep.guard_work_resource_requirement()','EXECUTE')::text
+        || '|' || has_function_privilege('aep_runtime','aep.guard_project_resource_write_grant()','EXECUTE')::text
+        || '|' || has_function_privilege('aep_runtime','aep.guard_approved_grant_decision_mutation()','EXECUTE')::text
+        || '|' || has_function_privilege('aep_runtime','aep.guard_resource_archive()','EXECUTE')::text
         || '|' || has_table_privilege('aep_runtime','aep.work_resource_requirements','SELECT')::text
         || '|' || has_table_privilege('aep_runtime','aep.executions','SELECT')::text
         || '|' || has_table_privilege('aep_runtime','aep.resource_claims','SELECT')::text
@@ -596,7 +706,7 @@ def main() -> None:
           )
         );
     """)
-    if runtime_grants != "true|true|true|false|false|false|true":
+    if runtime_grants != "true|true|true|false|false|false|false|false|false|false|true":
         raise AssertionError(f"Runtime grants/RLS boundary failed: {runtime_grants}")
     runtime_work = ready_work(project_a, "runtime-rpc-only")
     runtime_result = scalar(
