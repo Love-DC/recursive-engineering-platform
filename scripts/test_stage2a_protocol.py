@@ -225,35 +225,30 @@ def parse_claim(result: subprocess.CompletedProcess[str]) -> tuple[str, int, int
     return execution_id, int(attempt), int(fence), lease_until, int(work_version)
 
 def test_live_lease_boundary_race(work_id: str, current: tuple[str, int, int, str, int]) -> None:
-    """Renew and attempt takeover while both wait behind a held Work-row lock."""
+    """Queue renewal and takeover behind one Work lock, then release after expiry."""
     env = os.environ.copy()
     env["PGPASSWORD"] = PASSWORD
     cmd = ["psql", "-X", "-q", "-A", "-t", "-v", "ON_ERROR_STOP=1",
            "-h", HOST, "-p", PORT, "-U", USER, "-d", DATABASE]
     holder = subprocess.Popen(
-        cmd + ["-c",
-               "BEGIN; "
-               f"SELECT work_id FROM aep.works WHERE work_id={lit(work_id)}::uuid FOR UPDATE; "
-               "SELECT pg_sleep(2.5); COMMIT;"],
-        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
+        cmd, text=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, env=env, bufsize=1,
     )
     renew = None
     takeover = None
     try:
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline:
-            sleeping = scalar(
-                "SELECT count(*) FROM pg_stat_activity "
-                "WHERE datname=current_database() AND query LIKE '%pg_sleep(2.5)%' "
-                "AND state='active';"
-            )
-            if sleeping == "1":
-                break
-            if holder.poll() is not None:
-                raise AssertionError("Work lock holder exited before entering its sleep")
-            time.sleep(0.05)
-        else:
-            raise AssertionError("Work lock holder did not acquire the Work row")
+        assert holder.stdin is not None and holder.stdout is not None
+        holder.stdin.write(
+            "BEGIN; "
+            f"SELECT work_id::text FROM aep.works WHERE work_id={lit(work_id)}::uuid FOR UPDATE;\\n"
+        )
+        holder.stdin.flush()
+        ready, _, _ = select.select([holder.stdout], [], [], 10)
+        if not ready:
+            raise AssertionError("Work lock holder did not return the locked Work ID")
+        locked_work = holder.stdout.readline().strip()
+        if locked_work != work_id:
+            raise AssertionError(f"Work lock holder returned unexpected Work ID: {locked_work!r}")
 
         renew_sql = (
             "SELECT work_version::text FROM aep.renew_execution("
@@ -277,37 +272,74 @@ def test_live_lease_boundary_race(work_id: str, current: tuple[str, int, int, st
             if blocked == "2":
                 break
             if renew.poll() is not None or takeover.poll() is not None:
-                raise AssertionError("lease-boundary contender exited before both were blocked")
+                renew_out, renew_err = renew.communicate(timeout=5)
+                takeover_out, takeover_err = takeover.communicate(timeout=5)
+                raise AssertionError(
+                    "lease-boundary contender exited while Work lock was held: "
+                    f"renew={renew.returncode}/{renew_out}/{renew_err}; "
+                    f"takeover={takeover.returncode}/{takeover_out}/{takeover_err}"
+                )
             time.sleep(0.05)
         if blocked != "2":
-            raise AssertionError(f"expected renewal and takeover to wait on the held Work row; saw {blocked}")
+            raise AssertionError(f"expected renewal and takeover to wait on Work row; saw {blocked}")
+
+        # Do not release the Work lock until PostgreSQL confirms the stored lease
+        # has actually crossed the expiry boundary.
+        deadline = time.monotonic() + 10
+        expired = "f"
+        while time.monotonic() < deadline:
+            expired = scalar(
+                "SELECT (lease_until <= clock_timestamp())::text "
+                f"FROM aep.executions WHERE execution_id={lit(current[0])}::uuid;"
+            )
+            if expired == "true":
+                break
+            time.sleep(0.05)
+        if expired != "true":
+            raise AssertionError("the queued Work lease did not reach its expiry boundary")
+
+        holder.stdin.write("COMMIT;\\n")
+        holder.stdin.flush()
+        holder.stdin.close()
+        holder.wait(timeout=10)
+        holder.stdout.read()
+        holder.stderr.read()
 
         renew_out, renew_err = renew.communicate(timeout=10)
         takeover_out, takeover_err = takeover.communicate(timeout=10)
-        if renew.returncode != 0:
-            raise AssertionError(f"pre-expiry renewal failed: {renew_err}")
-        if takeover.returncode == 0 or "live execution lease" not in takeover_err:
-            raise AssertionError(
-                f"claim crossed a still-live lease after waiting on Work lock: {takeover_out}/{takeover_err}"
-            )
-        new_version = int(renew_out.strip())
+        if renew.returncode == 0 or not (
+            "expired lease" in renew_err or "stale, superseded" in renew_err
+        ):
+            raise AssertionError(f"expired renewal was not rejected: {renew_out}/{renew_err}")
+        if takeover.returncode != 0:
+            raise AssertionError(f"expired lease takeover failed: {takeover_out}/{takeover_err}")
+        new_claim = parse_claim(subprocess.CompletedProcess(
+            takeover.args, takeover.returncode, takeover_out, takeover_err
+        ))
+        if new_claim[2] != current[2] + 1 or new_claim[0] == current[0]:
+            raise AssertionError(f"lease-boundary takeover did not advance the fence: {current}/{new_claim}")
         state = scalar(
             "SELECT status || '|' || current_execution_id::text || '|' "
             "|| fence_generation::text || '|' || version::text "
             f"FROM aep.works WHERE work_id={lit(work_id)}::uuid;"
         )
-        if state != f"running|{current[0]}|{current[2]}|{new_version}":
-            raise AssertionError(f"renew/takeover boundary race produced incoherent Work state: {state}")
-        print("PASS lease boundary: Work-row serialization lets renewal win before expiry; takeover is rejected")
+        if state != f"running|{new_claim[0]}|{new_claim[2]}|{new_claim[4]}":
+            raise AssertionError(f"lease-boundary race produced incoherent Work state: {state}")
+        print("PASS lease boundary: after expiry, serialized takeover wins and queued renewal is rejected")
     finally:
         if holder.poll() is None:
             holder.terminate()
-        holder.communicate(timeout=5)
+            holder.wait(timeout=5)
+        if holder.stdin is not None and not holder.stdin.closed:
+            holder.stdin.close()
+        if holder.stdout is not None:
+            holder.stdout.close()
+        if holder.stderr is not None:
+            holder.stderr.close()
         for proc in (renew, takeover):
             if proc is not None and proc.poll() is None:
                 proc.terminate()
                 proc.communicate(timeout=5)
-
 
 
 def main() -> None:
@@ -367,7 +399,7 @@ def main() -> None:
     # A renewal and takeover both queue behind a Work-row lock. Before the lease
     # expiry, the renewal may extend it but the takeover must never steal it.
     boundary_work = ready_work(project_a, "lease-boundary-race")
-    boundary_claim = parse_claim(psql(claim_sql(boundary_work, str(uuid4()), 30)))
+    boundary_claim = parse_claim(psql(claim_sql(boundary_work, str(uuid4()), 1)))
     test_live_lease_boundary_race(boundary_work, boundary_claim)
 
     # Under SERIALIZABLE, a stale-snapshot worker aborts with 40001. Retry a whole
