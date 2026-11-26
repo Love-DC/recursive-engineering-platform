@@ -70,3 +70,5 @@ jobs:
           PGPASSWORD: postgres
           PGDATABASE: aep_test
         run: python scripts/test_postgres_prototype.py
+      - name: Run Stage 2A atomic coordination tests
+        run: python scripts/test_stage2a_protocol.py
