@@ -17,7 +17,7 @@ This directory contains a PostgreSQL experiment for the Stage 1A/1B data model a
 
 ## Verification
 
-The initial Stage 2A candidate at HEAD `285dbc092744cb5d0f88ab391e25a84257298919` passed GitHub Actions [Run #54](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45781729538) on PostgreSQL 17.12. That source was then independently reviewed and returned **CHANGES_REQUIRED**. The current PR #38 remediation candidate includes additional resource-identity and dependency-eligibility guards/tests; Run #54 does not validate those changes. A fresh exact-HEAD CI run and independent re-review are pending.
+The initial Stage 2A candidate at HEAD `285dbc092744cb5d0f88ab391e25a84257298919` passed [Run #54](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45781729538), then returned **CHANGES_REQUIRED** on independent review. The remediation code candidate at HEAD `cd107fa62377a46846731d1c6eba3ba0909d2374` / tree `30b4fcfb54be3472ec77e59af20b7cb0351a8bbc` passed exact-head [Run #61](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45785205746) on PostgreSQL 17.12, including the new resource-identity and dependency-eligibility tests. This documentation synchronization follows that code candidate; a fresh exact-head CI run for the resulting PR head and independent re-review remain pending.
 
 The Stage 1A/1B integrated baseline is merged through [PR #9](https://github.com/Love-DC/recursive-engineering-platform/pull/9). Its post-merge evidence, including disposable PostgreSQL 17.12 scope, remains in the [canonical evidence record](https://github.com/Love-DC/recursive-engineering-platform/pull/9#issuecomment-7183275628).
 
