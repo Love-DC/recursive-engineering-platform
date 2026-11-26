@@ -293,10 +293,17 @@ def main() -> None:
             "T21 conflicting ExternalRef did not roll back Work, WorkRequest, and WorkEvent "
             f"(counts={rollback_count}/{rollback_request_count}/{rollback_event_count})"
         )
+    external_ref_unique_name = scalar(
+        "SELECT conname FROM pg_constraint "
+        "WHERE conrelid='aep.external_refs'::regclass AND contype='u' "
+        "AND pg_get_constraintdef(oid)='UNIQUE (provider, host, resource_key, object_type, external_id)';"
+    )
+    if not external_ref_unique_name:
+        raise AssertionError("ExternalRef composite unique constraint is missing")
     expect_constraint(
         "INSERT INTO aep.external_refs(provider,host,resource_key,object_type,external_id,work_id) "
         f"VALUES('github','github.com','repo:1471589776','issue','600001',{lit(ext_a.split('|')[0])}::uuid);",
-        "external_refs_provider_host_resource_key_object_type_external_id_key",
+        external_ref_unique_name,
         "ExternalRef physical external-object uniqueness",
     )
     print("PASS T21 slice: ExternalRef uniqueness and full Work/WorkRequest/WorkEvent rollback")
@@ -439,7 +446,36 @@ def main() -> None:
     )
     if not decision_id:
         raise AssertionError("OwnerDecision proposal was not created")
-    print("PASS Stage 1B: OwnerDecision approval cannot omit provenance fields")
+    owner_version_constraint = scalar(
+        "SELECT conname FROM pg_constraint WHERE conrelid='aep.owner_decisions'::regclass "
+        "AND contype='u' "
+        "AND pg_get_constraintdef(oid)='UNIQUE (scope_type, scope_key, decision_key, decision_version)';"
+    )
+    if not owner_version_constraint:
+        raise AssertionError("OwnerDecision scoped-version unique constraint is missing")
+    expect_constraint(
+        "INSERT INTO aep.owner_decisions(scope_type,scope_key,decision_key,statement,decision_version,status) "
+        "VALUES('project','prototype','future-write-grant','Duplicate version',1,'proposed');",
+        owner_version_constraint,
+        "OwnerDecision scoped-version uniqueness",
+    )
+    psql(
+        "INSERT INTO aep.owner_decisions(scope_type,scope_key,decision_key,statement,decision_version,status,"
+        "approval_source_kind,approval_source_ref,approver_principal,approval_provenance,approved_at) "
+        "VALUES('project','prototype','single-approval','Approved v1',1,'approved',"
+        "'direct_owner_message','test://owner-approval','test-owner',"
+        "'{""direct_owner_confirmation"":true}'::jsonb,now());"
+    )
+    expect_constraint(
+        "INSERT INTO aep.owner_decisions(scope_type,scope_key,decision_key,statement,decision_version,status,"
+        "approval_source_kind,approval_source_ref,approver_principal,approval_provenance,approved_at) "
+        "VALUES('project','prototype','single-approval','Approved v2',2,'approved',"
+        "'direct_owner_message','test://owner-approval-v2','test-owner',"
+        "'{""direct_owner_confirmation"":true}'::jsonb,now());",
+        "owner_decisions_one_current_approval_uq",
+        "One current OwnerDecision approval per scoped decision",
+    )
+    print("PASS Stage 1B: OwnerDecision unique version and one-current-approval constraints")
 
     # Create a graph descriptor. Shared graph write membership requires a grant reference.
     graph_id = scalar(
@@ -570,9 +606,42 @@ def main() -> None:
         f"({lit(project2)}::uuid,{lit(resource_id)}::uuid,{lit(work_two)}::uuid,{lit(execution_two)}::uuid,'refs/heads/main','repository_ref','*','active',now()+interval '5 minutes',1);",
         check=False,
     )
-    if resource_race.returncode == 0:
-        raise AssertionError("Two projects claimed the same physical repository/ref conflict key")
-    print("PASS Stage 1B: exact physical ResourceClaim uniqueness across two Project namespaces")
+    if resource_race.returncode == 0 or "resource_claims_active_exact_conflict_uq" not in resource_race.stderr:
+        raise AssertionError(
+            "Two projects were not excluded by the active whole-ref ResourceClaim unique index: "
+            f"{resource_race.stderr}"
+        )
+    expect_constraint(
+        "INSERT INTO aep.resource_claims(project_id,resource_id,work_id,execution_id,resource_ref,write_set_kind,conflict_key,status,lease_until,fence) "
+        f"VALUES({lit(project2)}::uuid,{lit(resource_id)}::uuid,{lit(work_two)}::uuid,{lit(execution_two)}::uuid,'refs/heads/other-key','repository_ref','other','active',now()+interval '5 minutes',1);",
+        "resource_claims_repository_ref_whole_key_ck",
+        "Repository-ref claims cannot choose a bypass conflict_key",
+    )
+    expect_constraint(
+        "INSERT INTO aep.resource_claims(project_id,resource_id,work_id,execution_id,resource_ref,write_set_kind,conflict_key,status,lease_until,fence) "
+        f"VALUES({lit(project2)}::uuid,{lit(resource_id)}::uuid,{lit(work_two)}::uuid,{lit(execution_two)}::uuid,'refs/heads/path-set','path_set','path:/src','active',now()+interval '5 minutes',1);",
+        "resource_claims_active_requires_repository_ref_ck",
+        "Active path_set claims are rejected until overlap locking exists",
+    )
+    expect_constraint(
+        "INSERT INTO aep.resource_claims(project_id,resource_id,work_id,execution_id,resource_ref,write_set_kind,conflict_key,status,lease_until,fence) "
+        f"VALUES({lit(project2)}::uuid,{lit(opaque_case_one)}::uuid,{lit(work_two)}::uuid,{lit(execution_two)}::uuid,'refs/heads/fk-project-resource','repository_ref','*','active',now()+interval '5 minutes',1);",
+        "resource_claims_project_id_resource_id_fkey",
+        "ResourceClaim must reference a ProjectResource pair",
+    )
+    expect_constraint(
+        "INSERT INTO aep.resource_claims(project_id,resource_id,work_id,execution_id,resource_ref,write_set_kind,conflict_key,status,lease_until,fence) "
+        f"VALUES({lit(project2)}::uuid,{lit(resource_id)}::uuid,{lit(work_one)}::uuid,{lit(execution_one)}::uuid,'refs/heads/fk-project-work','repository_ref','*','active',now()+interval '5 minutes',1);",
+        "resource_claims_project_id_work_id_fkey",
+        "ResourceClaim Work must belong to its project",
+    )
+    expect_constraint(
+        "INSERT INTO aep.resource_claims(project_id,resource_id,work_id,execution_id,resource_ref,write_set_kind,conflict_key,status,lease_until,fence) "
+        f"VALUES({lit(project_id)}::uuid,{lit(resource_id)}::uuid,{lit(work_one)}::uuid,{lit(execution_two)}::uuid,'refs/heads/fk-work-execution','repository_ref','*','active',now()+interval '5 minutes',1);",
+        "resource_claims_work_id_execution_id_fkey",
+        "ResourceClaim Execution must belong to its Work",
+    )
+    print("PASS Stage 1B: whole-ref exclusion, no path_set overclaim, and all three ResourceClaim composite FKs")
 
     # Relation types are distinct: parent-child metadata and dependency graph edges.
     psql(
