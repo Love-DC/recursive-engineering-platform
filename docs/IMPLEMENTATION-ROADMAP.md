@@ -11,7 +11,11 @@ Stage 1B data model: [Issue #8](https://github.com/Love-DC/recursive-engineering
 
 **Stage 1A — canonical Work registration implemented and tested in PR #9.** Active canonical identity uniqueness, request idempotency, ExternalRef uniqueness, append-only Work events, and the register-or-link transaction passed the named tests.
 
-**Stage 1B — minimum coordination data model implemented and schema-tested in PR #9.** Physical Resource / ProjectResource, Execution, ResourceClaim, dependency graph descriptors/membership, typed WorkRelations, OwnerDecision provenance, Evidence, and OperationReceipt/event records are present as additive migration 0002. CI validates per-Work attempt_no and fence uniqueness with targeted terminal-Execution probes, the exact active ResourceClaim conflict, each of the three composite ResourceClaim foreign keys with a distinct negative test, selected RLS/table-ownership properties, and other integrity constraints. These are tested schema slices, not the Stage 2 transaction protocols. This does not implement the Stage 2 transaction protocols.
+**Stage 1B — minimum coordination data model implemented and schema-tested in PR #9.** Physical Resource / ProjectResource, Execution, ResourceClaim, dependency graph descriptors/membership, typed WorkRelations, OwnerDecision provenance, Evidence, and OperationReceipt/event records are present as additive migration 0002. CI validates per-Work attempt_no and fence uniqueness with targeted terminal-Execution probes, the exact active ResourceClaim conflict, each of the three composite ResourceClaim foreign keys with a distinct negative test, selected RLS/table-ownership properties, and other integrity constraints. These are tested schema slices, not the Stage 2A/2B protocols.
+
+**Stage 2A — implementation candidate exists in [PR #38](https://github.com/Love-DC/recursive-engineering-platform/pull/38), still Open + Draft.** The initial candidate's exact-HEAD Run #54 passed PostgreSQL 17.12 protocol/integration tests and repository contract checks. Independent review returned `CHANGES_REQUIRED` (P1 resource-identity mutation, P1 missing claim-time dependency checks, P2 stale status documentation). Remediation adds immutable physical Resource identity, claim-time resource contract revalidation, and read-only dependency eligibility checks. The amended candidate needs fresh exact-HEAD CI and another independent review; it is not merged or accepted.
+
+**Stage 2B — dependency graph mutation, cycle prevention, graph-wide concurrency, and READY invalidation remain unimplemented.**
 
 ### Historical CI evidence — not final candidate evidence
 
@@ -30,9 +34,9 @@ The stage numbers describe two different planning views and must not be read as 
 | Architecture Snapshot v2.0 | Implementation roadmap | Mapping |
 |---|---|---|
 | Stage 1 — Work registration and coordination, including the required atomic coordination and authorization guarantees | Stages 1A and 1B | Preparatory implementation slices: canonical Work registration and the minimum coordination data model. These slices do not complete architecture Stage 1. |
-| Remaining architecture Stage 1 guarantees | Implementation Stage 2 | Still to implement and verify: atomic claim and resource reservation, lease/takeover and monotonic fencing, stale-write rejection, and project authorization. |
+| Remaining architecture Stage 1 guarantees | Implementation Stage 2A + Stage 2B | Stage 2A implements transactional claim/resource reservation, lease/takeover/fencing, and claim-time eligibility checks. Stage 2B implements dependency mutation, DAG safety, graph-wide concurrency, and READY invalidation. |
 
-Implementation Stage 2 also contains the dependency mutation and DAG safety protocols specified by the accepted baseline. Architecture stage definitions remain unchanged.
+Architecture stage definitions remain unchanged; implementation Stage 2A does not complete the remaining Stage 1 guarantees by itself.
 
 ## Stages and gates
 
@@ -41,7 +45,8 @@ Implementation Stage 2 also contains the dependency mutation and DAG safety prot
 | 0 | Repository governance, architecture baseline, decision register, migration/test conventions, CI | PR merged after independent review; CI on exact head; fresh-session entry succeeds | IMPLEMENTED AND MERGED TO MAIN; EXACT-HEAD AND POST-MERGE CI VERIFIED |
 | 1A | Project, canonical Work, exact active identity, ExternalRef, request idempotency, register-or-link | T01–T03, T21 mapping slice, clean migration | IMPLEMENTED AND MERGED TO MAIN; EXACT-HEAD AND POST-MERGE CI VERIFIED |
 | 1B | Physical Resource, ProjectResource, Execution, ResourceClaim, relation graph, OwnerDecision, Evidence, OperationReceipt | Clean migration, FK/unique/check constraints, owner/RLS object checks | IMPLEMENTED AND MERGED TO MAIN; SCHEMA TESTS AND POST-MERGE CI VERIFIED |
-| 2 | Atomic claim, resource reservation, lease/fencing, dependency mutation and DAG safety | Adversarial multi-connection and fault tests T04–T10 | NOT STARTED |
+| 2A | Atomic claim, resource reservation, lease/fencing, stale-attempt rejection, resource identity integrity, and read-only prerequisite eligibility | T04–T06 plus claim-time prerequisite/resource adversarial tests | REMEDIATION IN OPEN DRAFT PR #38; INITIAL RUN #54 PASSED; INDEPENDENT REVIEW CHANGES_REQUIRED; FRESH EXACT-HEAD CI AND RE-REVIEW PENDING |
+| 2B | Dependency graph mutation, cycle prevention, graph-wide concurrency, READY invalidation, and dependency mutation authorization | Adversarial graph-lock/cycle/READY invalidation tests T07–T09 | NOT STARTED |
 | 3 | GitHub/Actions adapter, per-attempt refs, receipts and reconciliation, exact-SHA lifecycle | Adapter contract tests and stale external side-effect reconciliation T12–T15/T21/T22 | NOT STARTED |
 | 4 | Session recovery, authorized Context Compiler, evidence-derived memory, bounded discovery | Fresh-session E2E and empty-queue discovery T10/T11/T19/T20/T25 | NOT STARTED |
 | 5 | Heterogeneous project pilot | Owner-selected pilot(s), passed core suite, adapter capability evidence | BLOCKED ON D13 |
@@ -53,6 +58,6 @@ Implementation Stage 2 also contains the dependency mutation and DAG safety prot
 - No existing Supabase project or production write path is modified during prototype work.
 - Stage 1 migrations run only in disposable GitHub Actions PostgreSQL 17.12.
 - Stage completion requires exact-SHA CI evidence and independent review; same-session self-review is not independent.
-- The Stage 1B schema records grants and execution/resource/relation/evidence/receipt identities, but the protocol functions that enforce them remain Stage 2/3 work.
+- The Stage 1B schema records the durable identities; Stage 2A now adds a prototype claim/lease/fence/resource-reservation protocol in PR #38, pending remediation and independent re-review. Stage 2B graph mutation and cycle/READY protocols, Stage 3 adapters, and all production authorization/deployment gates remain separate.
 - D4 remains provisional. D9/D13/D15/D16 remain open and are not resolved by this PR.
 - Production authority, pilot selection, and legacy cutover are separate gates, not implied by architecture acceptance.
