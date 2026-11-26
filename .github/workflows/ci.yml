@@ -76,3 +76,5 @@ jobs:
         run: python scripts/test_stage2b_protocol.py
       - name: Run Stage 3 GitHub delivery reconciliation tests
         run: python scripts/test_stage3_delivery_protocol.py
+      - name: Run Stage 4A fresh-session recovery tests
+        run: python scripts/test_stage4_recovery.py
