@@ -59,6 +59,91 @@ def expect_error(sql: str, needle: str, label: str) -> None:
         )
 
 
+def manifest_registration_sql(resource_id: str, manifest: dict) -> str:
+    return (
+        "SELECT aep.register_delivery_adapter_manifest("
+        f"{lit(resource_id)}::uuid,{json_sql(manifest)},NULL);"
+    )
+
+
+def evidence_rpc_sql(
+    execution_id: str, kind: str, sha: str, source: str,
+    actor: str | None, payload: dict,
+) -> str:
+    actor_sql = "NULL" if actor is None else lit(actor)
+    return (
+        "SELECT aep.record_delivery_evidence("
+        f"{lit(execution_id)}::uuid,{lit(kind)},{lit(sha)},{lit(source)},"
+        f"{actor_sql},{json_sql(payload)});"
+    )
+
+
+def test_manifest_sql_validation(resource_id: str, manifest: dict) -> None:
+    malformed = json.loads(json.dumps(manifest))
+    malformed.pop("schema_version")
+    expect_error(
+        manifest_registration_sql(resource_id, malformed),
+        "schema_version must be numeric 1",
+        "SQL RPC rejects missing manifest schema version",
+    )
+
+    malformed = json.loads(json.dumps(manifest))
+    malformed["schema_version"] = "1"
+    expect_error(
+        manifest_registration_sql(resource_id, malformed),
+        "schema_version must be numeric 1",
+        "SQL RPC rejects non-numeric manifest schema version",
+    )
+
+    status_mutations = (
+        ("missing", lambda capability: capability.pop("status")),
+        ("JSON null", lambda capability: capability.update(status=None)),
+        ("non-string", lambda capability: capability.update(status=7)),
+        ("unsupported", lambda capability: capability.update(status="unknown")),
+    )
+    for label, mutate in status_mutations:
+        malformed = json.loads(json.dumps(manifest))
+        mutate(malformed["operations"]["ci_lookup"])
+        expect_error(
+            manifest_registration_sql(resource_id, malformed),
+            "Invalid capability status",
+            f"SQL RPC rejects {label} capability status",
+        )
+
+    malformed = json.loads(json.dumps(manifest))
+    malformed["operations"]["ci_lookup"] = "supported"
+    expect_error(
+        manifest_registration_sql(resource_id, malformed),
+        "Capability ci_lookup must be an object",
+        "SQL RPC rejects a non-object capability",
+    )
+    print("PASS Stage 3 SQL manifest RPC: numeric schema version and capability shape/status fail closed")
+
+
+def expect_missing_capability_status(
+    resource_id: str, manifest: dict, capability: str,
+    execution_id: str, kind: str, sha: str, source: str,
+    actor: str | None, payload: dict, error: str,
+) -> None:
+    path = "{operations," + capability + "}"
+    psql(
+        "UPDATE aep.delivery_adapter_manifests "
+        "SET manifest = jsonb_set(manifest,"
+        f"{lit(path)},{'(manifest #> ' + lit(path) + ') - ' + lit('status')}) "
+        f"WHERE resource_id={lit(resource_id)}::uuid;"
+    )
+    expect_error(
+        evidence_rpc_sql(execution_id, kind, sha, source, actor, payload),
+        error,
+        f"SQL RPC rejects missing {capability} capability status",
+    )
+    psql(
+        "UPDATE aep.delivery_adapter_manifests "
+        f"SET manifest={json_sql(manifest)} "
+        f"WHERE resource_id={lit(resource_id)}::uuid;"
+    )
+
+
 def setup_database() -> list[Path]:
     paths = sorted(MIGRATIONS.glob("*.sql"))
     versions: list[int] = []
@@ -112,10 +197,8 @@ def setup_repository_target(manifest: dict) -> tuple[str, str, str, str]:
         f"{lit(project_id)}::uuid,{lit(resource_id)}::uuid,'write','active',1,"
         f"{lit(decision_id)}::uuid);"
     )
-    psql(
-        "SELECT aep.register_delivery_adapter_manifest("
-        f"{lit(resource_id)}::uuid,{json_sql(manifest)},NULL);"
-    )
+    test_manifest_sql_validation(resource_id, manifest)
+    psql(manifest_registration_sql(resource_id, manifest))
     return project_id, resource_id, repository_id, "Love-DC/recursive-engineering-platform"
 
 
@@ -196,12 +279,7 @@ def record_evidence(
     execution_id: str, kind: str, sha: str, source: str,
     actor: str | None, payload: dict,
 ) -> str:
-    actor_sql = "NULL" if actor is None else lit(actor)
-    return scalar(
-        "SELECT aep.record_delivery_evidence("
-        f"{lit(execution_id)}::uuid,{lit(kind)},{lit(sha)},{lit(source)},"
-        f"{actor_sql},{json_sql(payload)});"
-    )
+    return scalar(evidence_rpc_sql(execution_id, kind, sha, source, actor, payload))
 
 
 def create_branch_provider_operation(
@@ -370,7 +448,7 @@ def test_execution_delivery_and_lost_response(
 
 def test_exact_sha_lifecycle(
     work_id: str, execution_id: str, fence: int, branch: str, pr_observation: dict,
-    resource_id: str, repository_id: str, provider: FakeGitHubProvider,
+    resource_id: str, repository_id: str, provider: FakeGitHubProvider, manifest: dict,
 ) -> None:
     pr_sha = pr_observation["pr_head_sha"]
     pr_number = pr_observation["pull_request_number"]
@@ -381,21 +459,80 @@ def test_exact_sha_lifecycle(
         "current exact pr head",
         "T15 CI exact-SHA mismatch",
     )
+    expect_missing_capability_status(
+        resource_id, manifest, "ci_lookup", execution_id, "ci", pr_sha,
+        "github://ci/missing-capability", None,
+        {"tested_sha": pr_sha, "conclusion": "success"},
+        "CI lookup is not supported",
+    )
+    expect_error(
+        evidence_rpc_sql(
+            execution_id, "ci", pr_sha, "github://ci/missing-tested-sha", None,
+            {"conclusion": "success"},
+        ),
+        "exact tested SHA and conclusion",
+        "SQL RPC rejects CI evidence missing tested_sha",
+    )
+    expect_error(
+        evidence_rpc_sql(
+            execution_id, "ci", pr_sha, "github://ci/missing-conclusion", None,
+            {"tested_sha": pr_sha},
+        ),
+        "exact tested SHA and conclusion",
+        "SQL RPC rejects CI evidence missing conclusion",
+    )
     record_evidence(
         execution_id, "ci", pr_sha, "github://actions/pr-head", None,
         {"tested_sha": pr_sha, "conclusion": "success", "run_id": 501}
+    )
+
+    expect_missing_capability_status(
+        resource_id, manifest, "process_review", execution_id, "process_review", pr_sha,
+        "github://review/missing-capability", "Love-DC",
+        {"github_review_state": "COMMENTED"},
+        "Process Review requires",
+    )
+    expect_error(
+        evidence_rpc_sql(
+            execution_id, "process_review", pr_sha, "github://review/missing-state",
+            "Love-DC", {"review_id": 604},
+        ),
+        "Process Review requires",
+        "SQL RPC rejects Process Review missing github_review_state",
     )
     record_evidence(
         execution_id, "process_review", pr_sha, "github://review/commented",
         "Love-DC", {"github_review_state": "COMMENTED", "review_id": 601}
     )
+    expect_missing_capability_status(
+        resource_id, manifest, "native_approval", execution_id, "native_approval", pr_sha,
+        "github://approval/missing-capability", "Love-DC",
+        {"github_review_state": "APPROVED", "native_event": True},
+        "Native Approval requires",
+    )
     expect_error(
-        "SELECT aep.record_delivery_evidence("
-        f"{lit(execution_id)}::uuid,'native_approval',{lit(pr_sha)},"
-        "'github://review/commented','Love-DC',"
-        f"{json_sql({'github_review_state':'COMMENTED','native_event':True})});",
-        "native approval requires",
-        "T14 process review is not native approval",
+        evidence_rpc_sql(
+            execution_id, "native_approval", pr_sha, "github://approval/missing-state",
+            "Love-DC", {"native_event": True},
+        ),
+        "Native Approval requires",
+        "SQL RPC rejects Native Approval missing github_review_state",
+    )
+    expect_error(
+        evidence_rpc_sql(
+            execution_id, "native_approval", pr_sha, "github://approval/missing-event",
+            "Love-DC", {"github_review_state": "APPROVED"},
+        ),
+        "Native Approval requires",
+        "SQL RPC rejects Native Approval missing native_event",
+    )
+    expect_error(
+        evidence_rpc_sql(
+            execution_id, "native_approval", pr_sha, "github://review/commented",
+            "Love-DC", {"github_review_state": "COMMENTED", "native_event": True},
+        ),
+        "Native Approval requires",
+        "T14 Process Review cannot satisfy Native Approval",
     )
     record_evidence(
         execution_id, "native_approval", pr_sha, "github://review/approved",
@@ -446,6 +583,30 @@ def test_exact_sha_lifecycle(
         "exact merge sha",
         "T15 post-merge CI must target merge SHA",
     )
+    expect_missing_capability_status(
+        resource_id, manifest, "post_merge_verification", execution_id, "post_merge_ci",
+        merge_sha, "github://post-merge-ci/missing-capability", None,
+        {"tested_sha": merge_sha, "conclusion": "success"},
+        "Post-merge verification is not supported",
+    )
+    expect_error(
+        evidence_rpc_sql(
+            execution_id, "post_merge_ci", merge_sha,
+            "github://post-merge-ci/missing-tested-sha", None,
+            {"conclusion": "success"},
+        ),
+        "exact tested SHA and conclusion",
+        "SQL RPC rejects post-merge CI missing tested_sha",
+    )
+    expect_error(
+        evidence_rpc_sql(
+            execution_id, "post_merge_ci", merge_sha,
+            "github://post-merge-ci/missing-conclusion", None,
+            {"tested_sha": merge_sha},
+        ),
+        "exact tested SHA and conclusion",
+        "SQL RPC rejects post-merge CI missing conclusion",
+    )
     record_evidence(
         execution_id, "post_merge_ci", merge_sha, "github://actions/merge-sha", None,
         {"tested_sha": merge_sha, "conclusion": "success", "run_id": 503}
@@ -460,12 +621,26 @@ def test_exact_sha_lifecycle(
         "unsupported",
         "T15/T22 unsupported deployment operation",
     )
+    expect_missing_capability_status(
+        resource_id, manifest, "deployment", execution_id, "deployment", merge_sha,
+        "github://deployment/missing-capability", None, {},
+        "Deployment is unsupported",
+    )
     expect_error(
         "SELECT aep.record_delivery_evidence("
         f"{lit(execution_id)}::uuid,'deployment',{lit(merge_sha)},"
         "'github://deployment/none',NULL,'{}'::jsonb);",
         "deployment is unsupported",
         "T15 deployment evidence cannot be fabricated",
+    )
+    expect_error(
+        evidence_rpc_sql(
+            execution_id, "owner_acceptance", merge_sha,
+            "owner://acceptance/missing-confirmation", "Love-DC",
+            {"decision_ref": "test-only"},
+        ),
+        "Owner acceptance requires direct confirmation",
+        "SQL RPC rejects Owner Acceptance missing direct_owner_confirmation",
     )
     record_evidence(
         execution_id, "owner_acceptance", merge_sha, "owner://acceptance/stage3-test",
@@ -582,7 +757,7 @@ def main() -> None:
     )
     test_exact_sha_lifecycle(
         work_id, execution_id, fence, branch, pr_observation,
-        resource_id, repository_id, provider
+        resource_id, repository_id, provider, manifest
     )
     test_stale_external_merge(
         project_id, resource_id, repository_id, repository_full_name, provider

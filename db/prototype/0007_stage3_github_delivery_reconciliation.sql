@@ -128,9 +128,14 @@ DECLARE
   v_key text;
   v_value jsonb;
 BEGIN
-  IF p_manifest IS NULL OR jsonb_typeof(p_manifest) <> 'object'
-     OR jsonb_typeof(p_manifest->'operations') <> 'object' THEN
+  IF p_manifest IS NULL OR jsonb_typeof(p_manifest) IS DISTINCT FROM 'object'
+     OR jsonb_typeof(p_manifest->'operations') IS DISTINCT FROM 'object' THEN
     RAISE EXCEPTION 'Adapter manifest must contain an operations object'
+      USING ERRCODE = '22023';
+  END IF;
+  IF jsonb_typeof(p_manifest->'schema_version') IS DISTINCT FROM 'number'
+     OR p_manifest->'schema_version' IS DISTINCT FROM '1'::jsonb THEN
+    RAISE EXCEPTION 'Adapter manifest schema_version must be numeric 1'
       USING ERRCODE = '22023';
   END IF;
   IF NOT ((p_manifest->'operations') ?& v_required)
@@ -141,18 +146,21 @@ BEGIN
   FOR v_key, v_value IN
     SELECT key, value FROM jsonb_each(p_manifest->'operations')
   LOOP
-    IF v_value->>'status' NOT IN ('supported','unsupported','unavailable') THEN
-      RAISE EXCEPTION 'Invalid capability status for %', v_key USING ERRCODE = '22023';
-    END IF;
-    IF jsonb_typeof(v_value) <> 'object' THEN
+    IF jsonb_typeof(v_value) IS DISTINCT FROM 'object' THEN
       RAISE EXCEPTION 'Capability % must be an object', v_key USING ERRCODE = '22023';
     END IF;
+    IF jsonb_typeof(v_value->'status') IS DISTINCT FROM 'string'
+       OR v_value->>'status' NOT IN ('supported','unsupported','unavailable') THEN
+      RAISE EXCEPTION 'Invalid capability status for %', v_key USING ERRCODE = '22023';
+    END IF;
   END LOOP;
-  IF p_manifest#>>'{operations,native_approval,independent_principal}' <> 'unavailable' THEN
+  IF jsonb_typeof(p_manifest#>'{operations,native_approval,independent_principal}') IS DISTINCT FROM 'string'
+     OR p_manifest#>>'{operations,native_approval,independent_principal}' IS DISTINCT FROM 'unavailable' THEN
     RAISE EXCEPTION 'This adapter cannot claim an independently authenticated approval principal'
       USING ERRCODE = '22023';
   END IF;
-  IF p_manifest#>>'{operations,process_review,identity}' <> 'same_authenticated_principal' THEN
+  IF jsonb_typeof(p_manifest#>'{operations,process_review,identity}') IS DISTINCT FROM 'string'
+     OR p_manifest#>>'{operations,process_review,identity}' IS DISTINCT FROM 'same_authenticated_principal' THEN
     RAISE EXCEPTION 'Process review must disclose the authenticated principal model'
       USING ERRCODE = '22023';
   END IF;
@@ -435,41 +443,42 @@ BEGIN
   END IF;
 
   IF p_evidence_kind = 'ci'
-     AND v_capabilities#>>'{ci_lookup,status}' <> 'supported' THEN
+     AND v_capabilities#>>'{ci_lookup,status}' IS DISTINCT FROM 'supported' THEN
     RAISE EXCEPTION 'CI lookup is not supported by the repository adapter'
       USING ERRCODE = '0A000';
   ELSIF p_evidence_kind = 'post_merge_ci'
-     AND v_capabilities#>>'{post_merge_verification,status}' <> 'supported' THEN
+     AND v_capabilities#>>'{post_merge_verification,status}' IS DISTINCT FROM 'supported' THEN
     RAISE EXCEPTION 'Post-merge verification is not supported by the repository adapter'
       USING ERRCODE = '0A000';
   END IF;
 
   IF p_evidence_kind = 'process_review' THEN
-    IF v_capabilities#>>'{process_review,status}' <> 'supported'
-       OR p_payload->>'github_review_state' <> 'COMMENTED' THEN
+    IF v_capabilities#>>'{process_review,status}' IS DISTINCT FROM 'supported'
+       OR p_payload->>'github_review_state' IS DISTINCT FROM 'COMMENTED' THEN
       RAISE EXCEPTION 'Process Review requires a supported COMMENTED event, not native approval'
         USING ERRCODE = '22023';
     END IF;
   ELSIF p_evidence_kind = 'native_approval' THEN
-    IF v_capabilities#>>'{native_approval,status}' <> 'supported'
-       OR p_payload->>'github_review_state' <> 'APPROVED'
-       OR p_payload->>'native_event' <> 'true' THEN
+    IF v_capabilities#>>'{native_approval,status}' IS DISTINCT FROM 'supported'
+       OR p_payload->>'github_review_state' IS DISTINCT FROM 'APPROVED'
+       OR p_payload->>'native_event' IS DISTINCT FROM 'true' THEN
       RAISE EXCEPTION 'Native Approval requires an observed GitHub APPROVED review event'
         USING ERRCODE = '22023';
     END IF;
   ELSIF p_evidence_kind IN ('ci','post_merge_ci') THEN
-    IF p_payload->>'tested_sha' <> p_subject_sha
+    IF p_payload->>'tested_sha' IS DISTINCT FROM p_subject_sha
+       OR p_payload->>'conclusion' IS NULL
        OR p_payload->>'conclusion' NOT IN ('success','failure','cancelled','neutral') THEN
       RAISE EXCEPTION 'CI evidence must state the exact tested SHA and conclusion'
         USING ERRCODE = '22023';
     END IF;
   ELSIF p_evidence_kind = 'deployment' THEN
-    IF v_capabilities#>>'{deployment,status}' <> 'supported' THEN
+    IF v_capabilities#>>'{deployment,status}' IS DISTINCT FROM 'supported' THEN
       RAISE EXCEPTION 'Deployment is unsupported by the repository adapter'
         USING ERRCODE = '0A000';
     END IF;
   ELSIF p_evidence_kind = 'owner_acceptance' THEN
-    IF p_payload->>'direct_owner_confirmation' <> 'true'
+    IF p_payload->>'direct_owner_confirmation' IS DISTINCT FROM 'true'
        OR NOT EXISTS (
          SELECT 1 FROM aep.execution_delivery_evidence_current AS evidence_row
          WHERE evidence_row.execution_id = p_execution_id
