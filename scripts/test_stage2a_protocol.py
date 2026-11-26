@@ -650,7 +650,7 @@ def main() -> None:
         "write_set_kind,conflict_key) VALUES("
         f"{lit(project_a)}::uuid,{lit(invalid_work)}::uuid,{lit(invalid_resource)}::uuid,"
         "'main','repository_ref','*');",
-        "work_resource_requirements_github_branch_ref_ck",
+        "WorkResourceRequirement requires an active GitHub repository and canonical fully-qualified branch ref",
         "non-canonical required branch ref",
     )
     expect_error(
