@@ -101,7 +101,6 @@ CROSS JOIN LATERAL (
   VALUES (relation_row.source_work_id), (relation_row.target_work_id)
 ) AS endpoint(work_id)
 WHERE relation_row.relation_type = 'depends_on'
-  AND relation_row.status = 'active'
 ON CONFLICT (graph_id, work_id) DO NOTHING;
 
 ALTER TABLE aep.work_relations
@@ -431,8 +430,24 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog, aep
 AS $function$
+DECLARE
+  v_work_id uuid;
 BEGIN
   IF NEW.member_status = 'active' THEN
+    -- create_dependency_graph holds the Project row FOR UPDATE. Lock every
+    -- existing Work in the same deterministic order before publishing its new
+    -- graph membership; claims that already own a Work row finish before the
+    -- new graph can become visible to the subsequent project lock check.
+    FOR v_work_id IN
+      SELECT work_row.work_id
+      FROM aep.works AS work_row
+      WHERE work_row.project_id = NEW.project_id
+      ORDER BY work_row.work_id
+      FOR UPDATE
+    LOOP
+      NULL;
+    END LOOP;
+
     INSERT INTO aep.dependency_graph_works(graph_id, work_id, membership_status)
     SELECT NEW.graph_id, work_row.work_id, 'active'
     FROM aep.works AS work_row
@@ -992,7 +1007,7 @@ BEGIN
 END
 $function$;
 
-CREATE FUNCTION aep.claim_work(
+CREATE OR REPLACE FUNCTION aep.claim_work(
   p_work_id uuid,
   p_session_id uuid,
   p_lease_seconds integer DEFAULT 300
@@ -1267,7 +1282,7 @@ BEGIN
 END
 $function$;
 
-CREATE FUNCTION aep.renew_execution(
+CREATE OR REPLACE FUNCTION aep.renew_execution(
   p_work_id uuid,
   p_execution_id uuid,
   p_fence bigint,
@@ -1383,7 +1398,7 @@ BEGIN
 END
 $function$;
 
-CREATE FUNCTION aep.finish_execution(
+CREATE OR REPLACE FUNCTION aep.finish_execution(
   p_work_id uuid,
   p_execution_id uuid,
   p_fence bigint,
