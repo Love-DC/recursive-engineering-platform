@@ -1,6 +1,6 @@
-# Work Registry, coordination model, and Stage 2A–Stage 3 protocol prototypes
+# Work Registry, coordination model, and Stage 2A–Stage 4A protocol prototypes
 
-This directory contains a PostgreSQL experiment for the Stage 1A/1B data model and the Stage 2A, Stage 2B, and Stage 3 transactional protocol prototypes.
+This directory contains disposable PostgreSQL experiments for the Stage 1A/1B data model and the Stage 2A, Stage 2B, Stage 3, and Stage 4A transactional/recovery protocol prototypes.
 
 ## Implemented
 
@@ -39,7 +39,16 @@ The session adapter capability manifest is `adapters/github-session-tools.json`.
 
 `aep_delivery/adapter.py` contains the contract parser and a deterministic Fake GitHub Provider. The fake can commit an external side effect and then drop the response; tests must query provider state before retrying. The database never calls GitHub and never treats its fence as revoking shared credentials. Stale merges are reconciled as actual external facts, marked stale, and invalidate affected old exact-HEAD evidence.
 
-The Stage 3 PostgreSQL 17.12 test runner is `scripts/test_stage3_delivery_protocol.py` and covers T12, T13, T14, T15, T21, and T22. The immutable current candidate HEAD/Tree and its matching exact-head CI run are maintained in the live [PR #49](https://github.com/Love-DC/recursive-engineering-platform/pull/49) and [Issue #48](https://github.com/Love-DC/recursive-engineering-platform/issues/48) evidence record. Independent review is pending in [Issue #50](https://github.com/Love-DC/recursive-engineering-platform/issues/50); PR #49 remains Draft and unmerged.
+The Stage 3 PostgreSQL 17.12 test runner is `scripts/test_stage3_delivery_protocol.py` and covers T12, T13, T14, T15, T21, and T22. [PR #49](https://github.com/Love-DC/recursive-engineering-platform/pull/49) is independently reviewed, merged at `ae3ff5ead7cf4fa3c0e8c47bb47b9beb24f9b18b`, and post-merge verified by Run #104. [Issue #54](https://github.com/Love-DC/recursive-engineering-platform/issues/54) and docs closeout PR #55 are complete. This remains disposable PostgreSQL prototype evidence; it does not imply production deployment, production authorization, pilot, RAE cutover, or unattended execution.
+
+## Stage 4A — fresh-session recovery prototype
+
+Migration `0009_stage4_session_recovery.sql` adds:
+- `aep.record_session_checkpoint`: append-only, idempotent checkpoint/handoff events bound to Work, current Execution, exact fence, originating session and a live lease. Stale or expired attempts cannot append.
+- `aep.recover_session_state`: reconstructs a bounded project snapshot from persisted ProjectResource grants, Work/dependency state, Execution attempts and lease/fence, Work events, source evidence, per-attempt deliveries and exact-SHA evidence, operation receipts/events, relevant OwnerDecision versions and adapter capability manifests.
+- The scope gate is checked before Work and evidence content retrieval. This is a trusted single-Owner prototype gate, not authenticated caller/session identity; T17 production authorization and D15 remain OPEN.
+- The response explicitly states that expired lease does not prove the old ChatGPT session stopped and database fencing does not revoke shared GitHub/MCP credentials.
+- `scripts/test_stage4_recovery.py` runs T10/T11 on disposable PostgreSQL 17.12. Code-only PR #65 candidate Run #112 passed clean migrations 0001–0009, T10/T11, and the Stage 2A/2B/3 regression suites. The final candidate HEAD and independent review/merge/post-merge evidence remain in [PR #65](https://github.com/Love-DC/recursive-engineering-platform/pull/65) and [Issue #59](https://github.com/Love-DC/recursive-engineering-platform/issues/59).
 
 ## What these tests do not prove
 
@@ -48,7 +57,7 @@ The Stage 3 PostgreSQL 17.12 test runner is `scripts/test_stage3_delivery_protoc
 - Populated-database migration upgrade/preflight safety.
 - A production Supabase deployment, production write API, authenticated caller-to-project binding, or hostile multi-tenant authorization.
 - A production GitHub provider/runtime, production-grade authenticated caller/project binding, actual branch-protection approval by an independent principal, deployment, or legacy RAE cutover. Stage 3 CI validates protocol behavior using a controllable provider fake; it does not deploy or write to GitHub.
-- An always-on LLM runtime or proof that an expired ChatGPT session has stopped acting.
+- An always-on LLM runtime or proof that an expired ChatGPT session has stopped acting. Stage 4A recovery only reconstructs persisted state and fences checkpoint writes; it does not terminate or authenticate sessions.
 
 ## Security and deployment limitations
 
