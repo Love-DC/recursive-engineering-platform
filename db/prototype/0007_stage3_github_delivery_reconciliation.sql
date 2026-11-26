@@ -108,6 +108,8 @@ SELECT evidence_row.*,
        ) AS is_valid
 FROM aep.execution_delivery_evidence AS evidence_row;
 
+ALTER VIEW aep.execution_delivery_evidence_current OWNER TO aep_owner;
+
 CREATE FUNCTION aep.register_delivery_adapter_manifest(
   p_resource_id uuid,
   p_manifest jsonb,
