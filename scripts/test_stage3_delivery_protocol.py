@@ -8,11 +8,14 @@ import os
 import re
 import subprocess
 from pathlib import Path
+import sys
 from uuid import uuid4
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
 from aep_delivery.adapter import FakeGitHubProvider, GitHubCapabilityManifest, LostProviderResponse
 
-ROOT = Path(__file__).resolve().parents[1]
 MIGRATIONS = ROOT / "db" / "prototype"
 DATABASE = "aep_stage3_test"
 HOST = os.environ.get("PGHOST", "127.0.0.1")
