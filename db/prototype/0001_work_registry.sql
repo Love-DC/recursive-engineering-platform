@@ -1,4 +1,7 @@
 -- Prototype-only PostgreSQL migration. Not a production Supabase migration.
+-- Trusted single-Owner test boundary only: register_work accepts a project_id
+-- supplied by its caller and does not implement project membership authorization.
+-- See db/prototype/README.md before extending or reusing this prototype.
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='aep_owner') THEN
