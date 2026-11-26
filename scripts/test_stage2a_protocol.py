@@ -137,7 +137,7 @@ def install_rendezvous() -> None:
     """)
 
 
-def race_claims(work_ids: list[str], lease_seconds: int = 60) -> list[subprocess.CompletedProcess[str]]:
+def race_claims(work_ids: list[str], lease_seconds: int = 60, *, serializable: bool = False) -> list[subprocess.CompletedProcess[str]]:
     """Release two independent PostgreSQL connections from one DB-side barrier."""
     env = os.environ.copy()
     env["PGPASSWORD"] = PASSWORD
@@ -170,6 +170,8 @@ def race_claims(work_ids: list[str], lease_seconds: int = 60) -> list[subprocess
                 "FROM public.aep_test_claim_rendezvous("
                 f"{lit(work_id)}::uuid,{lit(str(uuid4()))}::uuid,{lease_seconds});"
             )
+            if serializable:
+                sql = "BEGIN ISOLATION LEVEL SERIALIZABLE; " + sql + " COMMIT;"
             workers.append(subprocess.Popen(
                 cmd + ["-c", sql], text=True, stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE, env=env,
@@ -277,9 +279,30 @@ def main() -> None:
         raise AssertionError(f"T04 Work/current execution/fence projection is incoherent: {t04_state}")
     print("PASS T04: two independent PostgreSQL connections produced exactly one current execution")
 
+    # Under SERIALIZABLE, a stale-snapshot worker aborts with 40001. Retry a whole
+    # new transaction; it must observe the single committed current owner.
+    serializable_work = ready_work(project_a, "serializable-claim-race")
+    serializable_results = race_claims([serializable_work, serializable_work], lease_seconds=60, serializable=True)
+    serializable_successes = [result for result in serializable_results if result.returncode == 0]
+    serializable_failures = [result for result in serializable_results if result.returncode != 0]
+    if len(serializable_successes) != 1 or len(serializable_failures) != 1:
+        raise AssertionError("SERIALIZABLE race did not leave exactly one committed claim")
+    if "could not serialize access" not in serializable_failures[0].stderr.lower():
+        raise AssertionError(f"SERIALIZABLE loser did not return retryable 40001: {serializable_failures[0].stderr}")
+    retry_result = psql(claim_sql(serializable_work, str(uuid4()), 60), check=False)
+    if retry_result.returncode == 0 or "live execution lease" not in retry_result.stderr:
+        raise AssertionError("whole-transaction retry did not observe the single current lease")
+    if scalar(f"SELECT count(*) FROM aep.executions WHERE work_id={lit(serializable_work)}::uuid;") != "1":
+        raise AssertionError("SERIALIZABLE retry created a duplicate Execution")
+    print("PASS isolation: SERIALIZABLE conflict returns retryable 40001; whole-transaction retry observes the committed owner")
+
     # T05: expiry is checked after locking; takeover increments fence, and the old
     # execution cannot renew or finish even when supplied the latest Work version.
+    t05_resource = "00000000-0000-0000-0000-000000000100"
+    add_resource(t05_resource, "stage2a-takeover-100")
+    approved_project_grant(project_a, t05_resource, "takeover-100")
     t05_work = ready_work(project_a, "t05-takeover")
+    add_requirement(project_a, t05_work, t05_resource, "refs/heads/t05-takeover")
     initial = parse_claim(
         psql(claim_sql(t05_work, str(uuid4()), 1))
     )
@@ -301,6 +324,15 @@ def main() -> None:
     )
     if old_status != "expired":
         raise AssertionError(f"T05 prior execution was not marked expired: {old_status}")
+    old_claim_status = scalar(
+        f"SELECT status || '|' || (released_at IS NOT NULL)::text FROM aep.resource_claims "
+        f"WHERE execution_id={lit(initial[0])}::uuid;"
+    )
+    new_claim_status = scalar(
+        f"SELECT status FROM aep.resource_claims WHERE execution_id={lit(takeover[0])}::uuid;"
+    )
+    if old_claim_status != "expired|true" or new_claim_status != "active":
+        raise AssertionError(f"T05 takeover did not expire/recreate resource claims: {old_claim_status}/{new_claim_status}")
     expect_error(
         "SELECT * FROM aep.renew_execution("
         f"{lit(t05_work)}::uuid,{lit(initial[0])}::uuid,{initial[2]},"
@@ -339,6 +371,11 @@ def main() -> None:
     )
     if final_t05 != f"delivered|null|{takeover[2]}":
         raise AssertionError(f"T05 terminal Work projection is incorrect: {final_t05}")
+    if scalar(
+        f"SELECT status || '|' || (lease_until IS NULL)::text || '|' || (released_at IS NOT NULL)::text "
+        f"FROM aep.resource_claims WHERE execution_id={lit(takeover[0])}::uuid;"
+    ) != "released|true|true":
+        raise AssertionError("T05 successful completion did not release the current resource claim")
     print("PASS T05: expired takeover advances fence; stale renewal/completion rejected; current renew/complete accepted")
 
     # Resource fixtures use ordered UUIDs so the test can reverse requirement
@@ -382,7 +419,7 @@ def main() -> None:
         raise AssertionError("T06 winner did not atomically reserve the complete two-resource set")
     loser_state = scalar(
         "SELECT status || '|' || COALESCE(current_execution_id::text,'null') "
-        "|| '|' || fence_generation::text || '|' "
+        "|| '|' || fence_generation::text || '|' || "
         "(SELECT count(*)::text FROM aep.executions WHERE work_id=works.work_id) "
         f"FROM aep.works WHERE work_id={lit(loser_work)}::uuid;"
     )
@@ -427,7 +464,7 @@ def main() -> None:
     )
     rollback_state = scalar(
         "SELECT status || '|' || COALESCE(current_execution_id::text,'null') "
-        "|| '|' || fence_generation::text || '|' "
+        "|| '|' || fence_generation::text || '|' || "
         "(SELECT count(*)::text FROM aep.executions WHERE work_id=works.work_id) "
         f"FROM aep.works WHERE work_id={lit(rollback_work)}::uuid;"
     )
@@ -506,7 +543,7 @@ def main() -> None:
     add_requirement(project_a, invalid_grant_work, resource_1, "refs/heads/revoked-grant")
     expect_error(
         claim_sql(invalid_grant_work, str(uuid4()), 60),
-        "active write ProjectResource link",
+        "not approved or is out of scope",
         "claim with revoked ProjectResource OwnerDecision",
     )
     if scalar(
@@ -532,7 +569,7 @@ def main() -> None:
         AND owner_role.rolname='aep_owner'
         AND NOT owner_role.rolsuper
         AND NOT owner_role.rolbypassrls
-        AND proc.proconfig @> ARRAY['search_path=pg_catalog, aep']::text[]
+        AND replace(array_to_string(proc.proconfig,','),' ','')='search_path=pg_catalog,aep'
         AND NOT COALESCE((
           SELECT bool_or(acl.grantee=0 AND acl.privilege_type='EXECUTE')
           FROM aclexplode(COALESCE(proc.proacl,acldefault('f',proc.proowner))) AS acl
@@ -564,17 +601,28 @@ def main() -> None:
     runtime_work = ready_work(project_a, "runtime-rpc-only")
     runtime_result = scalar(
         "SET ROLE aep_runtime; "
-        f"SELECT fence::text || '|' || work_version::text FROM aep.claim_work("
-        f"{lit(runtime_work)}::uuid,{lit(str(uuid4()))}::uuid,60); RESET ROLE;"
-    )
-    runtime_fence, runtime_version = runtime_result.split("|", 1)
-    runtime_finish = scalar(
-        "SET ROLE aep_runtime; "
-        f"SELECT work_status FROM aep.finish_execution("
-        f"{lit(runtime_work)}::uuid,"
-        f"(SELECT current_execution_id FROM aep.works WHERE false),1,1,'succeeded','{{}}'::jsonb); "
+        f"SELECT execution_id::text || '|' || fence::text || '|' || work_version::text "
+        f"FROM aep.claim_work({lit(runtime_work)}::uuid,{lit(str(uuid4()))}::uuid,60); "
         "RESET ROLE;"
-    ) if False else ""
+    )
+    runtime_execution, runtime_fence_text, runtime_version_text = runtime_result.split("|", 2)
+    runtime_fence = int(runtime_fence_text)
+    runtime_version = int(runtime_version_text)
+    runtime_renewed = scalar(
+        "SET ROLE aep_runtime; "
+        "SELECT work_version::text FROM aep.renew_execution("
+        f"{lit(runtime_work)}::uuid,{lit(runtime_execution)}::uuid,{runtime_fence},"
+        f"{runtime_version},60); RESET ROLE;"
+    )
+    runtime_version = int(runtime_renewed)
+    runtime_finished = scalar(
+        "SET ROLE aep_runtime; "
+        "SELECT work_status FROM aep.finish_execution("
+        f"{lit(runtime_work)}::uuid,{lit(runtime_execution)}::uuid,{runtime_fence},"
+        f"{runtime_version},'succeeded','{{}}'::jsonb); RESET ROLE;"
+    )
+    if runtime_finished != "delivered":
+        raise AssertionError(f"aep_runtime could not complete using the current execution fence: {runtime_finished}")
     # The runtime can call the returned narrow RPC but cannot inspect canonical tables.
     direct_read = psql("SET ROLE aep_runtime; SELECT count(*) FROM aep.works;", check=False)
     if direct_read.returncode == 0 or "permission denied" not in direct_read.stderr:
