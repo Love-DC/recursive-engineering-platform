@@ -596,7 +596,8 @@ def main() -> None:
         "One owner membership per dependency graph",
     )
     missing_graph_grant = psql(
-        f"UPDATE aep.dependency_graph_members SET access_mode='write' "
+        f"UPDATE aep.dependency_graph_members "
+        f"SET access_mode='write',grant_decision_id=NULL "
         f"WHERE graph_id={lit(graph_id)}::uuid AND project_id={lit(project2)}::uuid;",
         check=False,
     )
