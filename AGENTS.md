@@ -9,7 +9,7 @@ This file is the repository-local entry contract for every AI session working in
 3. Read [the accepted architecture baseline](docs/ARCHITECTURE-BASELINE.md).
 4. Read [the decision register](docs/DECISION-REGISTER.md) before changing scope, permissions, deployment, or rollout.
 5. Read [the implementation roadmap](docs/IMPLEMENTATION-ROADMAP.md).
-6. Recover the live task and PR state from [the roadmap issue](https://github.com/Love-DC/recursive-engineering-platform/issues/2) and [the Stage 0 issue](https://github.com/Love-DC/recursive-engineering-platform/issues/3).
+6. Recover the live task and PR state from [the roadmap issue](https://github.com/Love-DC/recursive-engineering-platform/issues/2), [the Stage 0 issue](https://github.com/Love-DC/recursive-engineering-platform/issues/3), and [the Stage 1 issue](https://github.com/Love-DC/recursive-engineering-platform/issues/6).
 
 The authoritative design source is [Architecture RFC #1, Current Design Snapshot v2.0](https://github.com/Love-DC/recursive-engineering-platform/issues/1#issuecomment-7161657103). Repository documents summarize it; they must not silently weaken or expand it.
 
@@ -53,14 +53,16 @@ An Owner-approved architecture baseline does not implicitly approve unresolved d
 
 ## Current implementation boundary
 
-Current stage: Stage 0 — repository foundation.
+Stage 0 foundation and the Stage 1 canonical registration prototype are being delivered together through PR #7. The prototype database is ephemeral CI-only.
 
-Stage 0 is repository-only. It must not:
-- mutate any Supabase project or database;
+Stage 1 must not:
+- mutate any existing Supabase project or database;
 - change the old RAE repository or database;
 - add production credentials or a production write gateway;
 - select pilot projects;
 - execute a legacy cutover;
 - implement or claim an always-on LLM runtime.
+
+The prototype is a trusted single-Owner experiment, not hostile multi-tenant isolation. In particular, its public function accepts a project_id as routing input and does not prove per-project authorization. Do not reuse it as a production interface until that boundary is designed and tested.
 
 Do not advance a stage merely because its documentation exists. Use the acceptance criteria and evidence required by the roadmap.
