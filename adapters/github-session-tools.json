@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "adapter": "github-session-tools",
+  "principal_model": "single_authenticated_github_principal",
+  "operations": {
+    "branch_ref": {
+      "status": "supported",
+      "tools": [
+        "create_branch",
+        "update_ref"
+      ],
+      "notes": "Creates and updates refs in repositories accessible to this session."
+    },
+    "pull_request": {
+      "status": "supported",
+      "tools": [
+        "create_pull_request",
+        "update_pull_request"
+      ],
+      "notes": "Creates and updates PR metadata; branch contents are supplied separately."
+    },
+    "process_review": {
+      "status": "supported",
+      "tools": [
+        "add_review_to_pr:COMMENT",
+        "add_comment_to_issue"
+      ],
+      "identity": "same_authenticated_principal",
+      "notes": "A session-authored COMMENT or conversation comment is process evidence, not native approval."
+    },
+    "native_approval": {
+      "status": "supported",
+      "tools": [
+        "add_review_to_pr:APPROVE"
+      ],
+      "independent_principal": "unavailable",
+      "notes": "The tool can submit a native APPROVED event as the connected principal; separate sessions do not create independent GitHub users or independent required approval."
+    },
+    "merge": {
+      "status": "supported",
+      "tools": [
+        "merge_pull_request"
+      ],
+      "notes": "Subject to the repository's actual branch rules, permissions, and exact expected HEAD SHA."
+    },
+    "ci_lookup": {
+      "status": "supported",
+      "tools": [
+        "get_commit_combined_status",
+        "fetch_commit_workflow_runs"
+      ],
+      "notes": "Evidence must retain the exact queried SHA; workflow-run lookup surface may be narrower than all GitHub Actions endpoints."
+    },
+    "post_merge_verification": {
+      "status": "supported",
+      "tools": [
+        "get_commit_combined_status",
+        "fetch"
+      ],
+      "notes": "Queries must target the actual merge commit SHA, not the pre-merge PR HEAD."
+    },
+    "deployment": {
+      "status": "unsupported",
+      "tools": [],
+      "notes": "No deployment action is exposed by this connected GitHub tool surface."
+    }
+  }
+}
