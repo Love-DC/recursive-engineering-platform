@@ -14,9 +14,9 @@ The platform must support heterogeneous projects while keeping project code, gov
 
 ## 2. Minimal physical deployment
 
-The MVP is intentionally small:
+The recommended minimum physical shape is intentionally small, subject to the still-provisional D4 consistency-domain decision:
 
-- one coordinating PostgreSQL consistency domain;
+- one coordinating PostgreSQL consistency domain (PROVISIONAL until D4 is resolved);
 - one canonical Work Registry;
 - replaceable, active ChatGPT Web sessions;
 - thin GitHub and GitHub Actions adapters;
