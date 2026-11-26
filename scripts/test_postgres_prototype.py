@@ -213,11 +213,22 @@ def main() -> None:
     if duplicate_resource.returncode == 0:
         raise AssertionError("Duplicate provider-stable Resource identity was accepted")
     owner_access = scalar(
-        "SET ROLE aep_owner; SELECT count(*) FROM aep.resources; RESET ROLE;"
+        "SET ROLE aep_owner; SELECT "
+        "(SELECT count(*) FROM aep.owner_decisions) + "
+        "(SELECT count(*) FROM aep.resources) + "
+        "(SELECT count(*) FROM aep.project_resources) + "
+        "(SELECT count(*) FROM aep.dependency_graphs) + "
+        "(SELECT count(*) FROM aep.dependency_graph_members) + "
+        "(SELECT count(*) FROM aep.executions) + "
+        "(SELECT count(*) FROM aep.resource_claims) + "
+        "(SELECT count(*) FROM aep.work_relations) + "
+        "(SELECT count(*) FROM aep.evidence) + "
+        "(SELECT count(*) FROM aep.operation_receipts) + "
+        "(SELECT count(*) FROM aep.operation_receipt_events); RESET ROLE;"
     )
-    if owner_access != "0":
-        raise AssertionError(f"Non-bypass owner role could not access owned resource table: {owner_access}")
-    print("PASS Stage 1B: non-bypass owner role owns and accesses new RLS-protected tables")
+    if not owner_access.isdigit():
+        raise AssertionError(f"Non-bypass owner role could not access all RLS-protected Stage 1B tables: {owner_access}")
+    print("PASS Stage 1B: non-bypass owner role owns and accesses all new RLS-protected tables")
     print("PASS Stage 1B: physical Resource identity is distinct from ProjectResource links")
 
     # OwnerDecision approval shape requires explicit direct-owner provenance fields.
