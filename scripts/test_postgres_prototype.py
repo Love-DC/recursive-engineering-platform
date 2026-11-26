@@ -368,13 +368,19 @@ def main() -> None:
                    FROM pg_proc p, LATERAL aclexplode(COALESCE(p.proacl,acldefault('f',p.proowner))) x
                    WHERE p.oid={function})::text
         || '|' || has_function_privilege('aep_runtime',{function},'EXECUTE')::text
+        || '|' || has_function_privilege('aep_runtime','aep.create_dependency_graph(uuid)','EXECUTE')::text
+        || '|' || has_function_privilege('aep_runtime','aep.set_dependency_graph_member(uuid,uuid,text,uuid)','EXECUTE')::text
+        || '|' || has_function_privilege('aep_runtime','aep.mutate_dependencies(uuid,text,jsonb)','EXECUTE')::text
+        || '|' || has_function_privilege('aep_runtime','aep.set_work_ready(uuid)','EXECUTE')::text
         || '|' || (NOT has_table_privilege('aep_runtime','aep.works','SELECT'))::text
+        || '|' || (NOT has_table_privilege('aep_runtime','aep.dependency_graph_works','SELECT'))::text
+        || '|' || (NOT has_table_privilege('aep_runtime','aep.dependency_graph_operations','SELECT'))::text
         || '|' || (SELECT bool_and(relrowsecurity AND relforcerowsecurity)::text
                    FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
                    WHERE n.nspname='aep' AND c.relkind='r');
     """)
     security_flags = security.split("|")
-    expected = ["true", "true", "search_path=pg_catalog,aep", "true", "true", "true", "true"]
+    expected = ["true", "true", "search_path=pg_catalog,aep", "true", "true", "true", "true", "true", "true", "true", "true", "true", "true"]
     if security_flags != expected:
         raise AssertionError(f"Security contract flags differ: actual={security_flags}, expected={expected}")
     denied = psql("SET ROLE aep_runtime; SELECT count(*) FROM aep.works;",check=False)
@@ -495,6 +501,8 @@ def main() -> None:
         "(SELECT count(*) FROM aep.executions) + "
         "(SELECT count(*) FROM aep.resource_claims) + "
         "(SELECT count(*) FROM aep.work_relations) + "
+        "(SELECT count(*) FROM aep.dependency_graph_works) + "
+        "(SELECT count(*) FROM aep.dependency_graph_operations) + "
         "(SELECT count(*) FROM aep.evidence) + "
         "(SELECT count(*) FROM aep.operation_receipts) + "
         "(SELECT count(*) FROM aep.operation_receipt_events); RESET ROLE;"
@@ -550,15 +558,27 @@ def main() -> None:
     )
     print("PASS Stage 1B: OwnerDecision unique version and one-current-approval constraints")
 
-    # Create a graph descriptor. Shared graph write membership requires a grant reference.
+    # Shared graph membership is added through the RPC and carries an exact
+    # graph/project/access-scoped direct-Owner grant, including read access.
     graph_id = scalar(
-        "INSERT INTO aep.dependency_graphs(graph_scope,owner_project_id) "
-        f"VALUES('shared',{lit(project_id)}::uuid) RETURNING graph_id;"
+        "SELECT aep.create_dependency_graph("
+        f"{lit(project_id)}::uuid);"
+    )
+    read_decision = scalar(
+        "INSERT INTO aep.owner_decisions("
+        "scope_type,scope_key,decision_key,statement,decision_version,status,"
+        "approval_source_kind,approval_source_ref,approver_principal,"
+        "approval_provenance,approved_at"
+        ") VALUES("
+        f"'project',{lit(project2)},{lit('dependency_graph:'+graph_id+':read')},"
+        "'Approved read access to the shared dependency graph',1,'approved',"
+        "'direct_owner_message','test://owner/dependency-graph-read','test-owner',"
+        "jsonb_build_object('direct_owner_confirmation',true),clock_timestamp()"
+        ") RETURNING decision_id;"
     )
     psql(
-        f"INSERT INTO aep.dependency_graph_members(graph_id,project_id,access_mode) "
-        f"VALUES({lit(graph_id)}::uuid,{lit(project_id)}::uuid,'owner'),"
-        f"({lit(graph_id)}::uuid,{lit(project2)}::uuid,'read');"
+        "SELECT aep.set_dependency_graph_member("
+        f"{lit(graph_id)}::uuid,{lit(project2)}::uuid,'read',{lit(read_decision)}::uuid);"
     )
     expect_constraint(
         "INSERT INTO aep.dependency_graph_members(graph_id,project_id,access_mode) "
@@ -828,8 +848,13 @@ def main() -> None:
     if invalid_parent.returncode == 0:
         raise AssertionError("parent_child relation accepted a missing required/optional value")
     psql(
-        "INSERT INTO aep.work_relations(source_work_id,target_work_id,relation_type,dependency_graph_id) VALUES "
-        f"({lit(work_one)}::uuid,{lit(work_child)}::uuid,'depends_on',{lit(graph_id)}::uuid);"
+        "SELECT aep.mutate_dependencies("
+        f"{lit(graph_id)}::uuid,{lit(str(uuid4()))},"
+        "jsonb_build_array(jsonb_build_object("
+        "'op','add',"
+        f"'source_work_id',{lit(work_child)},"
+        f"'target_work_id',{lit(work_one)}"
+        ")));"
     )
     duplicate_left = min(work_one, work_two)
     duplicate_right = max(work_one, work_two)
