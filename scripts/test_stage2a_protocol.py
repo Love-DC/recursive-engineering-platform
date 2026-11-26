@@ -13,7 +13,7 @@ from uuid import uuid4
 
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATIONS = ROOT / "db" / "prototype"
-DATABASE = os.environ.get("PGDATABASE", "aep_stage2a_test")
+DATABASE = "aep_stage2a_test"
 HOST = os.environ.get("PGHOST", "127.0.0.1")
 PORT = os.environ.get("PGPORT", "5432")
 USER = os.environ.get("PGUSER", "postgres")
