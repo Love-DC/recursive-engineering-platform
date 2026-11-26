@@ -364,8 +364,8 @@ def test_expiry_takeover_and_stale_checkpoint(
         raise AssertionError("fresh recovery did not select the new execution/fence after takeover")
     old_row = next(row for row in snapshot["executions"] if row["execution_id"] == execution_a)
     new_row = next(row for row in snapshot["executions"] if row["execution_id"] == execution_b)
-    if old_row["status"] != "superseded" or new_row["is_current"] is not True:
-        raise AssertionError("recovery did not preserve both old and current execution attempts")
+    if old_row["status"] != "expired" or new_row["is_current"] is not True:
+        raise AssertionError("recovery did not preserve the expired prior attempt and current execution")
     if not any(row["execution_id"] == execution_a for row in snapshot["deliveries"]):
         raise AssertionError("takeover discarded the prior per-execution delivery record")
     if not any(row["execution_id"] == execution_a and row["status"] == "uncertain"
