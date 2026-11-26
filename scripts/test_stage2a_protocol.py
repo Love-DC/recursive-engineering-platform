@@ -681,11 +681,12 @@ def main() -> None:
           FROM aclexplode(COALESCE(proc.proacl,acldefault('f',proc.proowner))) AS acl
         ),false);
     """)
-    if all_definers != "8":
-        raise AssertionError(f"Not every SECURITY DEFINER in schema aep meets owner/path/PUBLIC rules: {all_definers}/8")
+    if all_definers != "9":
+        raise AssertionError(f"Not every SECURITY DEFINER in schema aep meets owner/path/PUBLIC rules: {all_definers}/9")
     runtime_grants = scalar("""
       SELECT
-        has_function_privilege('aep_runtime','aep.claim_work(uuid,uuid,integer)','EXECUTE')::text
+        has_function_privilege('aep_runtime','aep.set_work_resource_requirements(uuid,jsonb)','EXECUTE')::text
+        || '|' || has_function_privilege('aep_runtime','aep.claim_work(uuid,uuid,integer)','EXECUTE')::text
         || '|' || has_function_privilege('aep_runtime','aep.renew_execution(uuid,uuid,bigint,bigint,integer)','EXECUTE')::text
         || '|' || has_function_privilege('aep_runtime','aep.finish_execution(uuid,uuid,bigint,bigint,text,jsonb)','EXECUTE')::text
         || '|' || has_function_privilege('aep_runtime','aep.guard_work_resource_requirement()','EXECUTE')::text
@@ -706,9 +707,34 @@ def main() -> None:
           )
         );
     """)
-    if runtime_grants != "true|true|true|false|false|false|false|false|false|false|true":
+    if runtime_grants != "true|true|true|true|false|false|false|false|false|false|false|true":
         raise AssertionError(f"Runtime grants/RLS boundary failed: {runtime_grants}")
     runtime_work = ready_work(project_a, "runtime-rpc-only")
+    runtime_requirement_count = scalar(
+        "SET ROLE aep_runtime; "
+        "SELECT aep.set_work_resource_requirements("
+        f"{lit(runtime_work)}::uuid,"
+        f"jsonb_build_array(jsonb_build_object('resource_id',{lit(resource_2)},"
+        "'resource_ref','refs/heads/runtime-rpc'))); RESET ROLE;"
+    )
+    if runtime_requirement_count != "1":
+        raise AssertionError(f"runtime requirement declaration RPC did not create one row: {runtime_requirement_count}")
+    expect_error(
+        "SET ROLE aep_runtime; "
+        "SELECT aep.set_work_resource_requirements("
+        f"{lit(runtime_work)}::uuid,"
+        f"jsonb_build_array(jsonb_build_object('resource_id',{lit(resource_2)},"
+        "'resource_ref','refs/heads/valid'),"
+        f"jsonb_build_object('resource_id',{lit(resource_2)},'resource_ref','main'))); RESET ROLE;",
+        "resource_claims_github_branch_ref_canonical_ck",
+        "atomic rollback of invalid WorkResourceRequirement set replacement",
+    )
+    if scalar(
+        "SELECT count(*) FROM aep.work_resource_requirements "
+        f"WHERE work_id={lit(runtime_work)}::uuid "
+        "AND resource_ref='refs/heads/runtime-rpc';"
+    ) != "1":
+        raise AssertionError("failed requirement replacement did not roll back the original declared set")
     runtime_result = scalar(
         "SET ROLE aep_runtime; "
         f"SELECT execution_id::text || '|' || fence::text || '|' || work_version::text "
