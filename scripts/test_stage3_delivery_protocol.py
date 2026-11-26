@@ -275,7 +275,27 @@ def test_manifest_contract(manifest: dict) -> None:
             raise
     else:
         raise AssertionError("adapter must refuse deployment")
-    print("PASS T22: capability declarations match tool surface and independent-principal limits")
+
+    temporarily_unavailable = json.loads(json.dumps(manifest))
+    temporarily_unavailable["operations"]["branch_ref"]["status"] = "unavailable"
+    unavailable_contract = GitHubCapabilityManifest(temporarily_unavailable)
+    try:
+        unavailable_contract.require("branch_ref")
+    except Exception as exc:
+        if "unavailable" not in str(exc):
+            raise
+    else:
+        raise AssertionError("adapter must distinguish temporary unavailability from support")
+
+    malformed = json.loads(json.dumps(manifest))
+    malformed["operations"]["native_approval"]["independent_principal"] = "supported"
+    try:
+        GitHubCapabilityManifest(malformed)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("manifest must reject claims of an independent approver principal")
+    print("PASS T22: supported, unsupported, unavailable, and single-principal limitations are explicit")
 
 
 def test_execution_delivery_and_lost_response(
