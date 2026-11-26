@@ -282,13 +282,19 @@ BEGIN
         'target_status', target_work.status
       ) ORDER BY relation_row.source_work_id, relation_row.relation_type,
                  relation_row.target_work_id)
-      FROM aep.work_relations AS relation_row
+      FROM (
+        SELECT relation_source.*
+        FROM aep.work_relations AS relation_source
+        WHERE relation_source.source_work_id = ANY(v_work_ids)
+          AND relation_source.status = 'active'
+        ORDER BY relation_source.source_work_id, relation_source.relation_type,
+                 relation_source.target_work_id
+        LIMIT p_related_limit
+      ) AS relation_row
       JOIN aep.works AS target_work
         ON target_work.work_id = relation_row.target_work_id
       LEFT JOIN aep.dependency_graphs AS graph_row
         ON graph_row.graph_id = relation_row.dependency_graph_id
-      WHERE relation_row.source_work_id = ANY(v_work_ids)
-        AND relation_row.status = 'active'
     ), '[]'::jsonb),
     'executions', COALESCE((
       SELECT jsonb_agg(jsonb_build_object(
@@ -311,9 +317,14 @@ BEGIN
         'pull_request_number', execution_row.pull_request_number,
         'result', execution_row.result
       ) ORDER BY execution_row.attempt_no DESC, execution_row.execution_id)
-      FROM aep.executions AS execution_row
+      FROM (
+        SELECT execution_source.*
+        FROM aep.executions AS execution_source
+        WHERE execution_source.work_id = ANY(v_work_ids)
+        ORDER BY execution_source.attempt_no DESC, execution_source.execution_id
+        LIMIT p_related_limit
+      ) AS execution_row
       JOIN aep.works AS work_row ON work_row.work_id = execution_row.work_id
-      WHERE execution_row.work_id = ANY(v_work_ids)
     ), '[]'::jsonb),
     'work_events', COALESCE((
       SELECT jsonb_agg(jsonb_build_object(
@@ -380,8 +391,13 @@ BEGIN
         'stale_external_side_effect', delivery_row.stale_external_side_effect,
         'updated_at', delivery_row.updated_at
       ) ORDER BY delivery_row.created_at DESC, delivery_row.delivery_id)
-      FROM aep.execution_deliveries AS delivery_row
-      WHERE delivery_row.work_id = ANY(v_work_ids)
+      FROM (
+        SELECT delivery_source.*
+        FROM aep.execution_deliveries AS delivery_source
+        WHERE delivery_source.work_id = ANY(v_work_ids)
+        ORDER BY delivery_source.created_at DESC, delivery_source.delivery_id
+        LIMIT p_related_limit
+      ) AS delivery_row
     ), '[]'::jsonb),
     'delivery_evidence', COALESCE((
       SELECT jsonb_agg(jsonb_build_object(
@@ -400,12 +416,17 @@ BEGIN
         'invalidated_by_ref', invalidation.invalidated_by_ref,
         'invalidated_at', invalidation.invalidated_at
       ) ORDER BY evidence_row.observed_at DESC, evidence_row.evidence_id)
-      FROM aep.execution_delivery_evidence AS evidence_row
-      JOIN aep.execution_deliveries AS delivery_row
-        ON delivery_row.execution_id = evidence_row.execution_id
+      FROM (
+        SELECT evidence_source.*
+        FROM aep.execution_delivery_evidence AS evidence_source
+        JOIN aep.execution_deliveries AS delivery_source
+          ON delivery_source.execution_id = evidence_source.execution_id
+        WHERE delivery_source.work_id = ANY(v_work_ids)
+        ORDER BY evidence_source.observed_at DESC, evidence_source.evidence_id
+        LIMIT p_related_limit
+      ) AS evidence_row
       LEFT JOIN aep.delivery_evidence_invalidations AS invalidation
         ON invalidation.evidence_id = evidence_row.evidence_id
-      WHERE delivery_row.work_id = ANY(v_work_ids)
     ), '[]'::jsonb),
     'operation_receipts', COALESCE((
       SELECT jsonb_agg(jsonb_build_object(
@@ -430,8 +451,13 @@ BEGIN
         'updated_at', receipt_row.updated_at,
         'reconciled_at', receipt_row.reconciled_at
       ) ORDER BY receipt_row.created_at DESC, receipt_row.operation_receipt_id)
-      FROM aep.operation_receipts AS receipt_row
-      WHERE receipt_row.work_id = ANY(v_work_ids)
+      FROM (
+        SELECT receipt_source.*
+        FROM aep.operation_receipts AS receipt_source
+        WHERE receipt_source.work_id = ANY(v_work_ids)
+        ORDER BY receipt_source.created_at DESC, receipt_source.operation_receipt_id
+        LIMIT p_related_limit
+      ) AS receipt_row
     ), '[]'::jsonb),
     'operation_receipt_events', COALESCE((
       SELECT jsonb_agg(jsonb_build_object(
@@ -466,10 +492,15 @@ BEGIN
         'grant_version', project_resource.grant_version,
         'grant_decision_id', project_resource.grant_decision_id
       ) ORDER BY resource_row.resource_id)
-      FROM aep.project_resources AS project_resource
+      FROM (
+        SELECT resource_link.*
+        FROM aep.project_resources AS resource_link
+        WHERE resource_link.project_id = p_project_id
+        ORDER BY resource_link.resource_id
+        LIMIT p_related_limit
+      ) AS project_resource
       JOIN aep.resources AS resource_row
         ON resource_row.resource_id = project_resource.resource_id
-      WHERE project_resource.project_id = p_project_id
     ), '[]'::jsonb),
     'owner_decisions', COALESCE((
       SELECT jsonb_agg(jsonb_build_object(
@@ -489,16 +520,22 @@ BEGIN
         'supersedes_decision_id', decision.supersedes_decision_id
       ) ORDER BY decision.scope_type, decision.scope_key, decision.decision_key,
                  decision.decision_version)
-      FROM aep.owner_decisions AS decision
-      WHERE (decision.scope_type = 'project' AND decision.scope_key = p_project_id::text)
-         OR (decision.scope_type = 'resource' AND decision.scope_key IN (
-           SELECT project_resource.resource_id::text
-           FROM aep.project_resources AS project_resource
-           WHERE project_resource.project_id = p_project_id
-         ))
-         OR (decision.scope_type = 'work' AND decision.scope_key IN (
-           SELECT unnest(v_work_ids)::text
-         ))
+      FROM (
+        SELECT decision_source.*
+        FROM aep.owner_decisions AS decision_source
+        WHERE (decision_source.scope_type = 'project' AND decision_source.scope_key = p_project_id::text)
+           OR (decision_source.scope_type = 'resource' AND decision_source.scope_key IN (
+             SELECT project_resource.resource_id::text
+             FROM aep.project_resources AS project_resource
+             WHERE project_resource.project_id = p_project_id
+           ))
+           OR (decision_source.scope_type = 'work' AND decision_source.scope_key IN (
+             SELECT unnest(v_work_ids)::text
+           ))
+        ORDER BY decision_source.scope_type, decision_source.scope_key,
+                 decision_source.decision_key, decision_source.decision_version
+        LIMIT p_related_limit
+      ) AS decision
     ), '[]'::jsonb),
     'adapter_capabilities', COALESCE((
       SELECT jsonb_agg(jsonb_build_object(
@@ -508,14 +545,95 @@ BEGIN
         'manifest', manifest_row.manifest,
         'updated_at', manifest_row.updated_at
       ) ORDER BY manifest_row.resource_id)
-      FROM aep.delivery_adapter_manifests AS manifest_row
-      WHERE manifest_row.resource_id IN (
-        SELECT project_resource.resource_id
+      FROM (
+        SELECT manifest_source.*
+        FROM aep.delivery_adapter_manifests AS manifest_source
+        WHERE manifest_source.resource_id IN (
+          SELECT project_resource.resource_id
+          FROM aep.project_resources AS project_resource
+          WHERE project_resource.project_id = p_project_id
+            AND project_resource.status = 'active'
+        )
+        ORDER BY manifest_source.updated_at DESC, manifest_source.resource_id
+        LIMIT p_related_limit
+      ) AS manifest_row
+    ), '[]'::jsonb),
+    'related_data_truncated', jsonb_build_object(
+      'dependencies', (
+        SELECT count(*) > p_related_limit
+        FROM aep.work_relations AS relation_row
+        WHERE relation_row.source_work_id = ANY(v_work_ids)
+          AND relation_row.status = 'active'
+      ),
+      'executions', (
+        SELECT count(*) > p_related_limit
+        FROM aep.executions AS execution_row
+        WHERE execution_row.work_id = ANY(v_work_ids)
+      ),
+      'work_events', (
+        SELECT count(*) > p_related_limit
+        FROM aep.work_events AS event_row
+        WHERE event_row.work_id = ANY(v_work_ids)
+      ),
+      'evidence', (
+        SELECT count(*) > p_related_limit
+        FROM aep.evidence AS evidence_row
+        WHERE evidence_row.project_id = p_project_id
+          AND evidence_row.work_id = ANY(v_work_ids)
+      ),
+      'deliveries', (
+        SELECT count(*) > p_related_limit
+        FROM aep.execution_deliveries AS delivery_row
+        WHERE delivery_row.work_id = ANY(v_work_ids)
+      ),
+      'delivery_evidence', (
+        SELECT count(*) > p_related_limit
+        FROM aep.execution_delivery_evidence AS evidence_row
+        JOIN aep.execution_deliveries AS delivery_row
+          ON delivery_row.execution_id = evidence_row.execution_id
+        WHERE delivery_row.work_id = ANY(v_work_ids)
+      ),
+      'operation_receipts', (
+        SELECT count(*) > p_related_limit
+        FROM aep.operation_receipts AS receipt_row
+        WHERE receipt_row.work_id = ANY(v_work_ids)
+      ),
+      'operation_receipt_events', (
+        SELECT count(*) > p_related_limit
+        FROM aep.operation_receipt_events AS event_row
+        JOIN aep.operation_receipts AS receipt_row
+          ON receipt_row.operation_receipt_id = event_row.operation_receipt_id
+        WHERE receipt_row.work_id = ANY(v_work_ids)
+      ),
+      'project_resources', (
+        SELECT count(*) > p_related_limit
         FROM aep.project_resources AS project_resource
         WHERE project_resource.project_id = p_project_id
-          AND project_resource.status = 'active'
+      ),
+      'owner_decisions', (
+        SELECT count(*) > p_related_limit
+        FROM aep.owner_decisions AS decision
+        WHERE (decision.scope_type = 'project' AND decision.scope_key = p_project_id::text)
+           OR (decision.scope_type = 'resource' AND decision.scope_key IN (
+             SELECT project_resource.resource_id::text
+             FROM aep.project_resources AS project_resource
+             WHERE project_resource.project_id = p_project_id
+           ))
+           OR (decision.scope_type = 'work' AND decision.scope_key IN (
+             SELECT unnest(v_work_ids)::text
+           ))
+      ),
+      'adapter_capabilities', (
+        SELECT count(*) > p_related_limit
+        FROM aep.delivery_adapter_manifests AS manifest_row
+        WHERE manifest_row.resource_id IN (
+          SELECT project_resource.resource_id
+          FROM aep.project_resources AS project_resource
+          WHERE project_resource.project_id = p_project_id
+            AND project_resource.status = 'active'
+        )
       )
-    ), '[]'::jsonb),
+    ),
     'lease_semantics', jsonb_build_object(
       'observed_at', v_now,
       'expired_lease_means_takeover_may_be_considered', true,
