@@ -237,7 +237,7 @@ def test_recovery_without_prior_session_context(
         "execution_fence,target_host,target_repository_id"
         ") VALUES("
         f"{lit(work_id)}::uuid,{lit(execution_a)}::uuid,'github','lost-pr--response-707',"
-        "'pull_request_create',{lit(resource_id)}::uuid,{lit(branch)},"
+        f"'pull_request_create',{lit(resource_id)}::uuid,{lit(branch)},"
         f"{lit('d'*64)},"
         f"{json_sql({'head':branch,'base':'main'})},"
         "'uncertain','pending',"
