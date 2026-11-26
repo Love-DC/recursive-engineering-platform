@@ -13,7 +13,11 @@ The CI test applies the migration to a clean PostgreSQL 17.12 database and check
 - migration filename version uniqueness/order and fresh database application;
 - selected role/function/RLS properties of the prototype.
 
-See [the integration test](../../scripts/test_postgres_prototype.py) and [the candidate CI run](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45733155916).
+See [the integration test](../../scripts/test_postgres_prototype.py) and [the exact candidate CI run](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45733477038).
+
+## Identity contract
+
+The prototype treats `identity_key` as an already normalized, deterministic key supplied by the registration caller. The database enforces exact equality over `project_id`, `identity_kind`, `identity_key`, and `identity_version`; it does not infer semantic similarity or normalize provider-specific identifiers. The version identifies the normalization/canonicalization contract used by the caller. Cross-version reconciliation and migration remain future work.
 
 ## Security and deployment limitations
 
