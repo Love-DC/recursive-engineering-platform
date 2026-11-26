@@ -159,13 +159,23 @@ def create_running_work(project_id: str, session_id: str) -> tuple[str, str, int
         )
         for _ in range(2)
     ]
+    graph_id = scalar(
+        "SELECT graph_id::text FROM aep.dependency_graphs "
+        f"WHERE owner_project_id={lit(project_id)}::uuid AND is_default;"
+    )
     for dependency_id in dependency_ids:
+        # The two prerequisite Works are terminal fixtures. This lets the root
+        # Work enter READY while retaining real depends_on edges in the project DAG.
+        psql(
+            "UPDATE aep.works SET status='delivered' "
+            f"WHERE work_id={lit(dependency_id)}::uuid;"
+        )
         psql(
             "INSERT INTO aep.work_relations("
-            "source_work_id,target_work_id,relation_type,required,status"
+            "source_work_id,target_work_id,relation_type,dependency_graph_id,status"
             ") VALUES("
             f"{lit(work_id)}::uuid,{lit(dependency_id)}::uuid,"
-            "'parent_child',false,'active');"
+            f"'depends_on',{lit(graph_id)}::uuid,'active');"
         )
     state = scalar(f"SELECT work_status FROM aep.set_work_ready({lit(work_id)}::uuid);")
     if state != "ready":
@@ -344,10 +354,17 @@ def test_recovery_without_prior_session_context(
                and row["source_ref"] == "artifact://stage4/checkpoint/707"
                for row in snapshot["evidence"]):
         raise AssertionError("T10 source evidence/checkpoint reference was not recovered")
-    if len([row for row in snapshot["dependencies"]
-            if row["source_work_id"] == work_id and row["relation_type"] == "parent_child"
-            and row["required"] is False]) != 2:
-        raise AssertionError("T10 dependency edges/target relationships were not recovered")
+    root_dependencies = [
+        row for row in snapshot["dependencies"]
+        if row["source_work_id"] == work_id and row["relation_type"] == "depends_on"
+    ]
+    if len(root_dependencies) != 2 or any(
+        row["dependency_graph_id"] is None or row["target_status"] != "delivered"
+        for row in root_dependencies
+    ):
+        raise AssertionError("T10 project DAG dependency edges, graph identity or target state were not recovered")
+    if work_row["dependencies_satisfied"] is not True:
+        raise AssertionError("T10 recovery did not reconstruct satisfied dependency eligibility")
     if not any(row["resource_id"] == resource_id and row["access_mode"] == "write"
                and row["grant_version"] == 1
                and row["grant_decision_id"] == owner_decision_id
