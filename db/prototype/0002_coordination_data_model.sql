@@ -72,6 +72,10 @@ CREATE TABLE aep.project_resources (
   CHECK (
     (status = 'active' AND revoked_at IS NULL)
     OR (status = 'revoked' AND revoked_at IS NOT NULL)
+  ),
+  CHECK (
+    (access_mode = 'read' AND grant_decision_id IS NULL)
+    OR (access_mode IN ('write','read_write') AND grant_decision_id IS NOT NULL)
   )
 );
 
@@ -151,7 +155,8 @@ ALTER TABLE aep.works
 
 CREATE TABLE aep.resource_claims (
   resource_claim_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  resource_id uuid NOT NULL REFERENCES aep.resources(resource_id),
+  project_id uuid NOT NULL,
+  resource_id uuid NOT NULL,
   work_id uuid NOT NULL,
   execution_id uuid NOT NULL,
   resource_ref text NOT NULL CHECK (length(btrim(resource_ref)) BETWEEN 1 AND 255),
@@ -165,6 +170,10 @@ CREATE TABLE aep.resource_claims (
   fence bigint NOT NULL CHECK (fence > 0),
   created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   released_at timestamptz,
+  FOREIGN KEY (project_id, resource_id)
+    REFERENCES aep.project_resources(project_id, resource_id),
+  FOREIGN KEY (project_id, work_id)
+    REFERENCES aep.works(project_id, work_id),
   FOREIGN KEY (work_id, execution_id)
     REFERENCES aep.executions(work_id, execution_id),
   CHECK (
