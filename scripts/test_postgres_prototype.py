@@ -47,6 +47,16 @@ def expect_constraint(sql: str, constraint_name: str, description: str) -> None:
         )
 
 
+def expect_unique_declaration(table: str, definition: str) -> None:
+    found = scalar(
+        "SELECT count(*) FROM pg_constraint "
+        f"WHERE conrelid={lit(table)}::regclass AND contype='u' "
+        f"AND convalidated AND pg_get_constraintdef(oid)={lit(definition)};"
+    )
+    if found != "1":
+        raise AssertionError(f"Required unique constraint declaration missing: {table} {definition}")
+
+
 def register(project_id: str, request_key: str, identity_key: str, *, title: str = "prototype",
              identity_kind: str = "test", identity_version: int = 1,
              session_id: str | None = None, external: dict[str, str] | None = None) -> str:
@@ -87,6 +97,17 @@ def main() -> None:
         "projects_project_key_key",
         "Project key uniqueness",
     )
+    # These composite unique keys are referenced by foreign keys and include
+    # a primary-key column, so duplicate-row probes would be masked by the PK.
+    # Verify the exact unique declarations and exercise their referencing FKs below.
+    expect_unique_declaration("aep.works", "UNIQUE (project_id, work_id)")
+    expect_unique_declaration(
+        "aep.work_requests", "UNIQUE (project_id, work_id, request_id)"
+    )
+    expect_unique_declaration(
+        "aep.executions", "UNIQUE (work_id, execution_id)"
+    )
+    print("PASS schema: composite unique FK targets exist and are validated")
     print("PASS T26: clean PostgreSQL 17 migration and project bootstrap")
 
     # T01 deterministic rendezvous: both registration sessions must reach a
@@ -98,7 +119,7 @@ def main() -> None:
       LANGUAGE plpgsql SET search_path=pg_catalog AS $$
       BEGIN
         IF NEW.identity_key='race-key' THEN
-          PERFORM pg_advisory_xact_lock({barrier_key_1}, {barrier_key_2});
+          PERFORM pg_advisory_xact_lock_shared({barrier_key_1}, {barrier_key_2});
         END IF;
         RETURN NEW;
       END $$;
