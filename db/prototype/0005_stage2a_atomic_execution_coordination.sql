@@ -46,6 +46,15 @@ DECLARE
   v_work aep.works%ROWTYPE;
   v_resource aep.resources%ROWTYPE;
 BEGIN
+  IF TG_OP = 'UPDATE'
+     AND (
+       NEW.work_id IS DISTINCT FROM OLD.work_id
+       OR NEW.project_id IS DISTINCT FROM OLD.project_id
+     ) THEN
+    RAISE EXCEPTION 'WorkResourceRequirement cannot move between Works or projects'
+      USING ERRCODE = '55000';
+  END IF;
+
   IF TG_OP = 'DELETE' THEN
     v_work_id := OLD.work_id;
   ELSE
