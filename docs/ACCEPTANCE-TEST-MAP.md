@@ -29,7 +29,7 @@ Authoritative behavioral definitions are in [Snapshot v2.0](https://github.com/L
 | T23 | Parent completion aggregates required/optional children | 2B | PASS — active required children gate parent success, optional children do not; Stage 2B test passed on exact source-head Run #85 and post-merge Run #86. |
 | T24 | Event/handover/ack replay is idempotent and stale versions rejected | 2–4 | PARTIAL — Work/evidence/receipt event append-only constraints tested; versioned transition and replay protocol not implemented |
 | T25 | Derived memory/index rebuilds from source evidence | 4 | NOT IMPLEMENTED |
-| T26 | Clean database migration chain has unique ordered versions | 1A–1B | PASS — both migrations applied to clean PostgreSQL 17.12 in CI |
+| T26 | Clean database migration chain has unique ordered versions | 1A–2B | PASS — migrations 0001–0006 apply in order to clean PostgreSQL 17.12; exact Stage 2B source-head Run #85 and post-merge Run #86 both passed the clean migration-chain checks. |
 
 ## Stage 2A delivery status — merged and post-merge verified
 
