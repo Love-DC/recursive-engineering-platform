@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 import hashlib
+import json
 from typing import Any
 
 
@@ -142,7 +143,7 @@ class FakeGitHubProvider:
         self, idempotency_key: str, operation_type: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
         payload_hash = hashlib.sha256(
-            __import__("json").dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
         existing = self._objects.get(idempotency_key)
         if existing is not None:
