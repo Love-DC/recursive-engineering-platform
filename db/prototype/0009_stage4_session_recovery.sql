@@ -308,7 +308,11 @@ BEGIN
         'lease_expired', execution_row.lease_until IS NOT NULL
                          AND execution_row.lease_until <= v_now,
         'is_current', work_row.current_execution_id = execution_row.execution_id,
-        'old_session_may_still_be_active', execution_row.status IN ('claimed','running'),
+        -- No persisted, trustworthy session-termination fact exists in this prototype.
+        -- Execution expiry/completion fences database writes but cannot terminate a
+        -- ChatGPT session or revoke its shared external credentials.
+        'old_session_may_still_be_active', execution_row.session_id IS NOT NULL,
+        'session_termination_observed', false,
         'started_at', execution_row.started_at,
         'finished_at', execution_row.finished_at,
         'base_sha', execution_row.base_sha,
