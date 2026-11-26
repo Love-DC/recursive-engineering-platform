@@ -392,7 +392,7 @@ def main() -> None:
     )
     resource_id = scalar(
         "INSERT INTO aep.resources(provider,host,resource_type,stable_resource_id,canonical_key,display_name) "
-        "VALUES('github','github.com','repository','1471589776','repo:1471589776','recursive-engineering-platform') "
+        "VALUES('github','github.com','repository','1471589776','repository:1471589776','recursive-engineering-platform') "
         "RETURNING resource_id;"
     )
     psql(
