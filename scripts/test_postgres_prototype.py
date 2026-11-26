@@ -625,6 +625,12 @@ def main() -> None:
     )
     expect_constraint(
         "INSERT INTO aep.resource_claims(project_id,resource_id,work_id,execution_id,resource_ref,write_set_kind,conflict_key,status,lease_until,fence) "
+        f"VALUES({lit(project2)}::uuid,{lit(resource_id)}::uuid,{lit(work_two)}::uuid,{lit(execution_two)}::uuid,'refs/heads/main','path_set','path:/src','reserved',now()+interval '5 minutes',1);",
+        "resource_claims_active_requires_repository_ref_ck",
+        "Reserved path_set claims are rejected until overlap locking exists",
+    )
+    expect_constraint(
+        "INSERT INTO aep.resource_claims(project_id,resource_id,work_id,execution_id,resource_ref,write_set_kind,conflict_key,status,lease_until,fence) "
         f"VALUES({lit(project2)}::uuid,{lit(opaque_case_one)}::uuid,{lit(work_two)}::uuid,{lit(execution_two)}::uuid,'refs/heads/fk-project-resource','repository_ref','*','active',now()+interval '5 minutes',1);",
         "resource_claims_project_id_resource_id_fkey",
         "ResourceClaim must reference a ProjectResource pair",
