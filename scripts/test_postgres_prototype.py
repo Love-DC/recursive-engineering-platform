@@ -193,11 +193,18 @@ def main() -> None:
     )
     psql(
         f"INSERT INTO aep.project_resources(project_id,resource_id,access_mode) VALUES "
-        f"({lit(project_id)}::uuid,{lit(resource_id)}::uuid,'read_write'),"
-        f"({lit(project2)}::uuid,{lit(resource_id)}::uuid,'read_write');"
+        f"({lit(project_id)}::uuid,{lit(resource_id)}::uuid,'read'),"
+        f"({lit(project2)}::uuid,{lit(resource_id)}::uuid,'read');"
     )
     if scalar(f"SELECT count(*) FROM aep.project_resources WHERE resource_id={lit(resource_id)}::uuid;") != "2":
         raise AssertionError("One physical resource could not be referenced by two project namespaces")
+    missing_project_grant = psql(
+        f"INSERT INTO aep.project_resources(project_id,resource_id,access_mode) "
+        f"VALUES({lit(project2)}::uuid,{lit(resource_id)}::uuid,'write');",
+        check=False,
+    )
+    if missing_project_grant.returncode == 0:
+        raise AssertionError("ProjectResource accepted write access without an OwnerDecision reference")
     duplicate_resource = psql(
         "INSERT INTO aep.resources(provider,host,resource_type,stable_resource_id,canonical_key) "
         "VALUES('github','github.com','repository','1471589776','repo:duplicate');",
@@ -270,12 +277,12 @@ def main() -> None:
     print("PASS Stage 1B: Execution attempts, attempt sequence, single-active index, and current Work pointer")
 
     psql(
-        "INSERT INTO aep.resource_claims(resource_id,work_id,execution_id,resource_ref,write_set_kind,conflict_key,status,lease_until,fence) VALUES "
-        f"({lit(resource_id)}::uuid,{lit(work_one)}::uuid,{lit(execution_one)}::uuid,'refs/heads/main','repository_ref','*','active',now()+interval '5 minutes',1);"
+        "INSERT INTO aep.resource_claims(project_id,resource_id,work_id,execution_id,resource_ref,write_set_kind,conflict_key,status,lease_until,fence) VALUES "
+        f"({lit(project_id)}::uuid,{lit(resource_id)}::uuid,{lit(work_one)}::uuid,{lit(execution_one)}::uuid,'refs/heads/main','repository_ref','*','active',now()+interval '5 minutes',1);"
     )
     resource_race = psql(
-        "INSERT INTO aep.resource_claims(resource_id,work_id,execution_id,resource_ref,write_set_kind,conflict_key,status,lease_until,fence) VALUES "
-        f"({lit(resource_id)}::uuid,{lit(work_two)}::uuid,{lit(execution_two)}::uuid,'refs/heads/main','repository_ref','*','active',now()+interval '5 minutes',1);",
+        "INSERT INTO aep.resource_claims(project_id,resource_id,work_id,execution_id,resource_ref,write_set_kind,conflict_key,status,lease_until,fence) VALUES "
+        f"({lit(project2)}::uuid,{lit(resource_id)}::uuid,{lit(work_two)}::uuid,{lit(execution_two)}::uuid,'refs/heads/main','repository_ref','*','active',now()+interval '5 minutes',1);",
         check=False,
     )
     if resource_race.returncode == 0:
