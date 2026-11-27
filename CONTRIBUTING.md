@@ -2,7 +2,7 @@
 
 ## Before making changes
 
-Read [AGENTS.md](AGENTS.md), the [architecture baseline](docs/ARCHITECTURE-BASELINE.md), the [decision register](docs/DECISION-REGISTER.md), and the [implementation roadmap](docs/IMPLEMENTATION-ROADMAP.md).
+Read [AGENTS.md](AGENTS.md), the [engineering standards](docs/ENGINEERING-STANDARDS.md), the [architecture baseline](docs/ARCHITECTURE-BASELINE.md), the [decision register](docs/DECISION-REGISTER.md), and the [implementation roadmap](docs/IMPLEMENTATION-ROADMAP.md).
 
 Check the linked GitHub issue and current PR state. Confirm that the task is in scope for the current stage.
 
@@ -13,7 +13,8 @@ Check the linked GitHub issue and current PR state. Confirm that the task is in 
 - Link the implementing PR to its issue.
 - State the exact scope, changed files, tests run, CI result, known limitations, and follow-up work in the PR body.
 - Keep PRs reviewable. Split unrelated concerns.
-- Do not merge based solely on an AI assertion; preserve independent review evidence and exact-head-SHA verification.
+- Match review depth to risk. One complete review of the exact candidate is normally sufficient; after fixes, re-review the affected areas. Additional full rounds require material changes or a newly demonstrated defect.
+- Preserve exact-head-SHA verification and the review evidence required by the repository's actual branch rules and the change's risk. Do not invent additional approval requirements.
 
 ## Database and migration rules
 
