@@ -45,7 +45,7 @@ CREATE TABLE aep.discovery_passes (
     OR (status = 'completed' AND stop_reason IS NULL AND stopped_at IS NULL AND completed_at IS NOT NULL)
   ),
   CHECK (tokens_reserved + tokens_used <= 1000000000),
-  CHECK (cost_reserved_micros + cost_used_micros <= 1000000000)
+  CHECK (cost_reserved_micros + cost_used_micros <= 1000000000000)
 );
 
 CREATE INDEX discovery_passes_scope_status_idx
@@ -86,7 +86,7 @@ CREATE TABLE aep.discovery_observations (
   work_id uuid REFERENCES aep.works(work_id),
   parent_work_id uuid REFERENCES aep.works(work_id),
   parent_observation_id uuid REFERENCES aep.discovery_observations(observation_id),
-  depth smallint CHECK (depth IS NULL OR depth BETWEEN 0 AND 8),
+  depth smallint CHECK (depth IS NULL OR depth BETWEEN 0 AND 16),
   required_child boolean,
   reserved_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   completed_at timestamptz,
@@ -322,8 +322,10 @@ BEGIN
     v_cursor := v_prior.resume_cursor;
     v_watermark := v_prior.watermark;
   ELSE
-    IF p_source_list IS NULL OR jsonb_typeof(p_source_list) IS DISTINCT FROM 'array'
-       OR jsonb_array_length(p_source_list) NOT BETWEEN 1 AND 64 THEN
+    IF p_source_list IS NULL OR jsonb_typeof(p_source_list) IS DISTINCT FROM 'array' THEN
+      RAISE EXCEPTION 'Source list must be a JSON array' USING ERRCODE = '22023';
+    END IF;
+    IF jsonb_array_length(p_source_list) NOT BETWEEN 1 AND 64 THEN
       RAISE EXCEPTION 'Source list must contain 1..64 authorized source prefixes'
         USING ERRCODE = '22023';
     END IF;
@@ -332,13 +334,16 @@ BEGIN
       RAISE EXCEPTION 'Cursor and watermark must be JSON objects' USING ERRCODE = '22023';
     END IF;
     FOR v_source IN
-      SELECT item.value->>'source_kind' AS source_kind,
+      SELECT item.value AS source,
+             item.value->>'source_kind' AS source_kind,
              item.value->>'source_prefix' AS source_prefix
       FROM jsonb_array_elements(p_source_list) AS item(value)
     LOOP
       v_kind := v_source.source_kind;
       v_prefix := v_source.source_prefix;
-      IF v_kind IS NULL OR length(btrim(v_kind)) NOT BETWEEN 1 AND 80
+      IF jsonb_typeof(v_source.source) IS DISTINCT FROM 'object'
+         OR NOT (v_source.source ?& ARRAY['source_kind','source_prefix'])
+         OR v_kind IS NULL OR length(btrim(v_kind)) NOT BETWEEN 1 AND 80
          OR v_prefix IS NULL OR length(btrim(v_prefix)) NOT BETWEEN length(v_root) AND 2000
          OR left(v_prefix,length(v_root)) <> v_root
          OR (length(v_prefix)>length(v_root)
@@ -348,7 +353,7 @@ BEGIN
       END IF;
     END LOOP;
     IF (SELECT count(*) FROM jsonb_array_elements(p_source_list)) <>
-       (SELECT count(DISTINCT value->>'source_kind' || '|' || value->>'source_prefix')
+       (SELECT count(DISTINCT (value->>'source_kind') || '|' || (value->>'source_prefix'))
         FROM jsonb_array_elements(p_source_list)) THEN
       RAISE EXCEPTION 'Duplicate source declarations are not allowed' USING ERRCODE = '22023';
     END IF;
@@ -454,6 +459,9 @@ DECLARE
 BEGIN
   IF NOT aep.context_project_resource_allowed(p_project_id,p_resource_id,true) THEN
     RETURN jsonb_build_object('status','denied','reason','project_scope_unavailable');
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM aep.projects WHERE project_id=p_project_id AND status='active') THEN
+    RETURN jsonb_build_object('status','denied','reason','project_inactive');
   END IF;
   IF p_call_key IS NULL OR length(btrim(p_call_key)) NOT BETWEEN 1 AND 160
      OR p_tool_name NOT IN ('github_search','github_fetch','github_fetch_issue','github_fetch_pr',
@@ -684,6 +692,9 @@ BEGIN
   -- It serializes evidence insertion, Work registration, and grant revocation.
   IF NOT aep.context_project_resource_allowed(p_project_id,p_resource_id,true) THEN
     RETURN jsonb_build_object('status','denied','reason','project_scope_unavailable');
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM aep.projects WHERE project_id=p_project_id AND status='active') THEN
+    RETURN jsonb_build_object('status','denied','reason','project_inactive');
   END IF;
 
   SELECT * INTO v_pass FROM aep.discovery_passes
@@ -969,6 +980,9 @@ BEGIN
   IF NOT aep.context_project_resource_allowed(p_project_id,p_resource_id,false) THEN
     RETURN jsonb_build_object('status','denied','reason','project_scope_unavailable');
   END IF;
+  IF NOT EXISTS (SELECT 1 FROM aep.projects WHERE project_id=p_project_id AND status='active') THEN
+    RETURN jsonb_build_object('status','denied','reason','project_inactive');
+  END IF;
   IF p_limit IS NULL OR p_limit NOT BETWEEN 1 AND 20 THEN
     RAISE EXCEPTION 'Discovery state limit must be between 1 and 20' USING ERRCODE = '22023';
   END IF;
@@ -1048,6 +1062,9 @@ BEGIN
   IF NOT aep.context_project_resource_allowed(p_project_id,p_resource_id,true) THEN
     RETURN jsonb_build_object('status','denied','reason','project_scope_unavailable');
   END IF;
+  IF NOT EXISTS (SELECT 1 FROM aep.projects WHERE project_id=p_project_id AND status='active') THEN
+    RETURN jsonb_build_object('status','denied','reason','project_inactive');
+  END IF;
   SELECT * INTO v_pass FROM aep.discovery_passes
   WHERE pass_id=p_pass_id AND project_id=p_project_id AND resource_id=p_resource_id
   FOR UPDATE;
@@ -1085,6 +1102,9 @@ BEGIN
   END IF;
   IF NOT aep.context_project_resource_allowed(p_project_id,p_resource_id,true) THEN
     RETURN jsonb_build_object('status','denied','reason','project_scope_unavailable');
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM aep.projects WHERE project_id=p_project_id AND status='active') THEN
+    RETURN jsonb_build_object('status','denied','reason','project_inactive');
   END IF;
   SELECT * INTO v_pass FROM aep.discovery_passes
   WHERE pass_id=p_pass_id AND project_id=p_project_id AND resource_id=p_resource_id
