@@ -344,6 +344,9 @@ def test_budgets_and_resume(project_id: str, resource_id: str, stable_id: str) -
     resumed = start_pass(project_id,resource_id,stable_id,session_id=str(uuid4()),
         budget=limits(max_tool_calls=3),resume_from=p["pass_id"])
     assert_status(resumed,"running","resume stopped pass")
+    if (resumed.get("tool_calls_used") != 1 or resumed.get("tokens_used") != 50
+            or resumed.get("cost_used_micros") != 40):
+        raise AssertionError(f"Resume must carry cumulative usage counters: {resumed}")
     state = json_result(
         "SELECT aep.get_discovery_state("
         f"{lit(project_id)}::uuid,{lit(resource_id)}::uuid,10);"
@@ -386,6 +389,16 @@ def test_budgets_and_resume(project_id: str, resource_id: str, stable_id: str) -
         candidate={"action":"skip","reason":"duplicate_or_not_actionable"})
     if no_progress.get("stop_reason")!="no_progress" or no_progress.get("resume_cursor")!={"page":2}:
         raise AssertionError(f"No-progress guard did not persist a resumable cursor: {no_progress}")
+    resumed_no_progress = start_pass(project_id,resource_id,stable_id,session_id=str(uuid4()),
+        budget=limits(max_no_progress=2),resume_from=p5["pass_id"])
+    if resumed_no_progress.get("no_progress_count") != 1:
+        raise AssertionError(f"Resume reset the cumulative no-progress count: {resumed_no_progress}")
+    _,no_progress_again,_ = record_call(project_id,resource_id,stable_id,
+        resumed_no_progress["pass_id"],resumed_no_progress["session_id"] if "session_id" in resumed_no_progress else str(uuid4()),
+        key="no-progress-again",cursor_before={"page":2},cursor_after={"page":3},
+        candidate={"action":"skip","reason":"same_candidate_no_progress"})
+    if no_progress_again.get("stop_reason")!="no_progress" or no_progress_again.get("no_progress_count") != 2:
+        raise AssertionError(f"Repeated no-progress across sessions did not stop: {no_progress_again}")
 
 
 def test_depth_and_fanout(project_id: str, resource_id: str, stable_id: str) -> None:
