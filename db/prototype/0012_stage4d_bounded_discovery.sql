@@ -392,12 +392,17 @@ BEGIN
     project_id,resource_id,session_id,request_key,request_payload,
     source_list,current_cursor,watermark,resume_cursor,
     max_depth,max_fanout,max_tool_calls,max_elapsed_ms,max_tokens,
-    max_cost_micros,max_no_progress,resume_from_pass_id
+    max_cost_micros,max_no_progress,resume_from_pass_id,
+    tool_calls_used,tokens_used,cost_used_micros,no_progress_count
   ) VALUES (
     p_project_id,p_resource_id,p_session_id,p_request_key,v_request_payload,
     v_source_list,v_cursor,v_watermark,v_cursor,
     v_max_depth,v_max_fanout,v_max_tool_calls,v_max_elapsed_ms,v_max_tokens,
-    v_max_cost_micros,v_max_no_progress,p_resume_from_pass_id
+    v_max_cost_micros,v_max_no_progress,p_resume_from_pass_id,
+    CASE WHEN v_prior.pass_id IS NULL THEN 0 ELSE v_prior.tool_calls_used END,
+    CASE WHEN v_prior.pass_id IS NULL THEN 0 ELSE v_prior.tokens_used END,
+    CASE WHEN v_prior.pass_id IS NULL THEN 0 ELSE v_prior.cost_used_micros END,
+    CASE WHEN v_prior.pass_id IS NULL THEN 0 ELSE v_prior.no_progress_count END
   )
   ON CONFLICT(project_id,resource_id,request_key) DO NOTHING;
   GET DIAGNOSTICS v_row_count = ROW_COUNT;
