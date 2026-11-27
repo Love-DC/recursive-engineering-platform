@@ -364,6 +364,7 @@ BEGIN
   END IF;
 
   v_request_payload := jsonb_build_object(
+    'session_id',p_session_id,
     'source_list',v_source_list,'cursor',v_cursor,'watermark',v_watermark,
     'limits',v_limits,'resume_from_pass_id',p_resume_from_pass_id
   );
