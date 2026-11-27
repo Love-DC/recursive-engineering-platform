@@ -378,6 +378,78 @@ $context_write_locks$;
 -- locks only after Work is locked, avoiding a project-lock -> Work-tuple cycle.
 DROP TRIGGER context_project_write_lock ON aep.work_resource_requirements;
 
+-- ProjectResource writes hold Resource then Project advisory locks before this
+-- grant check. Resource-scoped decisions and ProjectResource associations share
+-- those locks, so a tuple lock on OwnerDecision is unnecessary and can invert
+-- the order (association tuple/resource lock -> decision tuple vs revoker tuple
+-- -> Resource lock).
+CREATE OR REPLACE FUNCTION aep.guard_project_resource_write_grant()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, aep
+AS $function$
+DECLARE
+  v_decision aep.owner_decisions%ROWTYPE;
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    IF EXISTS (
+      SELECT 1 FROM aep.resource_claims AS claim
+      WHERE claim.project_id = OLD.project_id
+        AND claim.resource_id = OLD.resource_id
+        AND claim.status IN ('reserved', 'active')
+    ) THEN
+      RAISE EXCEPTION 'ProjectResource cannot be removed while active claims depend on it'
+        USING ERRCODE = '55000';
+    END IF;
+    RETURN OLD;
+  END IF;
+
+  IF TG_OP = 'UPDATE'
+     AND (
+       NEW.project_id IS DISTINCT FROM OLD.project_id
+       OR NEW.resource_id IS DISTINCT FROM OLD.resource_id
+       OR NEW.access_mode IS DISTINCT FROM OLD.access_mode
+       OR NEW.status IS DISTINCT FROM OLD.status
+       OR NEW.grant_version IS DISTINCT FROM OLD.grant_version
+       OR NEW.grant_decision_id IS DISTINCT FROM OLD.grant_decision_id
+     )
+     AND EXISTS (
+       SELECT 1 FROM aep.resource_claims AS claim
+       WHERE claim.project_id = OLD.project_id
+         AND claim.resource_id = OLD.resource_id
+         AND claim.status IN ('reserved', 'active')
+     ) THEN
+    RAISE EXCEPTION 'ProjectResource grant cannot change while active claims depend on it'
+      USING ERRCODE = '55000';
+  END IF;
+
+  IF NEW.status = 'active' AND NEW.access_mode IN ('write', 'read_write') THEN
+    SELECT decision.* INTO v_decision
+    FROM aep.owner_decisions AS decision
+    WHERE decision.decision_id = NEW.grant_decision_id;
+
+    IF NOT FOUND
+       OR v_decision.status <> 'approved'
+       OR NOT (
+         (v_decision.scope_type = 'resource'
+           AND v_decision.scope_key = NEW.resource_id::text)
+         OR
+         (v_decision.scope_type = 'project'
+           AND v_decision.scope_key = NEW.project_id::text)
+       ) THEN
+      RAISE EXCEPTION 'Active write ProjectResource requires an approved, correctly-scoped OwnerDecision'
+        USING ERRCODE = '23514',
+              CONSTRAINT = 'project_resources_active_write_requires_approved_grant_ck';
+    END IF;
+  END IF;
+
+  RETURN NEW;
+END
+$function$;
+
+ALTER FUNCTION aep.guard_project_resource_write_grant() OWNER TO aep_owner;
+
 CREATE OR REPLACE FUNCTION aep.guard_work_resource_requirement()
 RETURNS trigger
 LANGUAGE plpgsql
