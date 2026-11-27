@@ -463,9 +463,17 @@ def test_interrupted_reservation_recovery(
     new_session = str(uuid4())
     resumed = start_pass(
         project_id,resource_id,stable_id,session_id=new_session,
+        request_key="resume-interrupted-read",
         budget=limits(max_tool_calls=10),resume_from=old_pass["pass_id"]
     )
     assert_status(resumed,"running","new-session recovery of in-flight read")
+    replayed = start_pass(
+        project_id,resource_id,stable_id,session_id=new_session,
+        request_key="resume-interrupted-read",
+        budget=limits(max_tool_calls=10),resume_from=old_pass["pass_id"]
+    )
+    if replayed.get("pass_id")!=resumed.get("pass_id") or replayed.get("idempotent_replay") is not True:
+        raise AssertionError(f"Lost recovery response must replay the same resumed pass: {replayed}")
     if (resumed.get("tool_calls_used") != 1 or resumed.get("tokens_used") != 100
             or resumed.get("cost_used_micros") != 80
             or resumed.get("resume_cursor") != {"page":1}):
