@@ -408,8 +408,18 @@ def test_resource_scope_serialization(existing_project_id: str) -> None:
         association.wait(timeout=8)
         assoc_out = association.stdout.read() if association.stdout else ""
         assoc_err = association.stderr.read() if association.stderr else ""
-        if association.returncode != 0 or "resource_association_inserted" not in assoc_out:
-            raise AssertionError(f"ProjectResource insert failed after revocation: {assoc_out} {assoc_err}")
+        if association.returncode == 0 or "Active write ProjectResource requires an approved" not in assoc_err:
+            raise AssertionError(
+                "ProjectResource association was not rejected after resource decision revocation: "
+                f"exit={association.returncode} {assoc_out} {assoc_err}"
+            )
+        active_links = scalar(
+            "SELECT count(*) FROM aep.project_resources "
+            f"WHERE project_id={lit(project_two)}::uuid "
+            f"AND resource_id={lit(resource_one)}::uuid AND status='active';"
+        )
+        if active_links != "0":
+            raise AssertionError("revoked resource decision left an active ProjectResource association")
         reader.wait(timeout=8)
         read_out = reader.stdout.read() if reader.stdout else ""
         read_err = reader.stderr.read() if reader.stderr else ""
