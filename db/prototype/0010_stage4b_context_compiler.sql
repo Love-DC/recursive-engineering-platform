@@ -3,7 +3,7 @@
 BEGIN;
 
 -- A mutable latest-observation pointer is derived from append-only Evidence rows.
--- It is scoped by the physical repository and branch ref, not by a session label.
+-- It is scoped by Work, physical repository and branch ref, not by a session label.
 CREATE TABLE aep.context_source_heads (
   project_id uuid NOT NULL,
   work_id uuid NOT NULL,
@@ -17,7 +17,7 @@ CREATE TABLE aep.context_source_heads (
   evidence_id uuid NOT NULL REFERENCES aep.evidence(evidence_id),
   observed_by_session_id uuid NOT NULL,
   observed_at timestamptz NOT NULL DEFAULT clock_timestamp(),
-  PRIMARY KEY (project_id, resource_id, resource_ref),
+  PRIMARY KEY (project_id, work_id, resource_id, resource_ref),
   FOREIGN KEY (project_id, work_id) REFERENCES aep.works(project_id, work_id),
   FOREIGN KEY (project_id, resource_id) REFERENCES aep.project_resources(project_id, resource_id)
 );
@@ -47,8 +47,8 @@ CREATE TABLE aep.context_packs (
   created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   FOREIGN KEY (project_id, work_id) REFERENCES aep.works(project_id, work_id),
   FOREIGN KEY (project_id, resource_id) REFERENCES aep.project_resources(project_id, resource_id),
-  FOREIGN KEY (project_id, resource_id, resource_ref)
-    REFERENCES aep.context_source_heads(project_id, resource_id, resource_ref)
+  FOREIGN KEY (project_id, work_id, resource_id, resource_ref)
+    REFERENCES aep.context_source_heads(project_id, work_id, resource_id, resource_ref)
 );
 
 CREATE INDEX context_packs_work_created_idx
@@ -59,7 +59,7 @@ CREATE INDEX context_packs_work_created_idx
 CREATE TABLE aep.context_retrieval_events (
   event_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   operation text NOT NULL CHECK (operation IN ('record_source','compile','fetch')),
-  outcome text NOT NULL CHECK (outcome IN ('denied','recorded','unchanged','compiled','reused','stale','not_found')),
+  outcome text NOT NULL CHECK (outcome IN ('denied','recorded','unchanged','compiled','reused','stale')),
   project_id uuid,
   work_id uuid,
   resource_id uuid,
@@ -280,6 +280,7 @@ BEGIN
   INTO v_repository
   FROM aep.context_source_heads AS source_head
   WHERE source_head.project_id = p_project_id
+    AND source_head.work_id = p_work_id
     AND source_head.resource_id = p_resource_id
     AND source_head.resource_ref = p_resource_ref;
 
@@ -457,6 +458,7 @@ BEGIN
   SELECT source_head.* INTO v_head
   FROM aep.context_source_heads AS source_head
   WHERE source_head.project_id = p_project_id
+    AND source_head.work_id = p_work_id
     AND source_head.resource_id = p_resource_id
     AND source_head.resource_ref = p_resource_ref
   FOR UPDATE;
@@ -510,8 +512,7 @@ BEGIN
     p_commit_sha, p_tree_sha, p_content_sha256, v_provenance, v_evidence_id,
     p_session_id, clock_timestamp()
   )
-  ON CONFLICT (project_id, resource_id, resource_ref) DO UPDATE SET
-    work_id = EXCLUDED.work_id,
+  ON CONFLICT (project_id, work_id, resource_id, resource_ref) DO UPDATE SET
     source_version = EXCLUDED.source_version,
     commit_sha = EXCLUDED.commit_sha,
     tree_sha = EXCLUDED.tree_sha,
@@ -799,8 +800,8 @@ BEGIN
   IF NOT FOUND THEN
     INSERT INTO aep.context_retrieval_events(
       operation,outcome,pack_id,session_id,source_count,source_bytes
-    ) VALUES ('fetch','not_found',p_pack_id,p_session_id,0,0);
-    RETURN jsonb_build_object('status','not_found');
+    ) VALUES ('fetch','denied',p_pack_id,p_session_id,0,0);
+    RETURN jsonb_build_object('status','denied','reason','project_scope_unavailable');
   END IF;
 
   IF NOT aep.context_project_resource_allowed(v_project_id,v_resource_id) THEN

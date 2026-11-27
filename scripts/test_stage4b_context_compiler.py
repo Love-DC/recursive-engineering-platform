@@ -70,6 +70,32 @@ def setup_database() -> None:
     print("PASS T26: clean migrations 0001..0010 on PostgreSQL 17.12")
 
 
+def test_runtime_access_boundary() -> None:
+    functions = (
+        "aep.record_context_source_revision(uuid,uuid,uuid,text,uuid,text,text,text,jsonb)",
+        "aep.compile_context_pack(uuid,uuid,uuid,text,uuid,integer,text,text,text)",
+        "aep.get_context_pack(uuid,uuid,integer,text,text,text)",
+    )
+    checks = [
+        scalar(
+            "SELECT has_function_privilege("
+            f"'aep_runtime',{lit(function)},'EXECUTE')::text;"
+        )
+        for function in functions
+    ]
+    table_checks = [
+        scalar(
+            "SELECT has_table_privilege('aep_runtime',"
+            f"{lit('aep.'+table)},'SELECT')::text;"
+        )
+        for table in ("context_source_heads","context_packs","context_retrieval_events")
+    ]
+    if checks != ["true","true","true"]:
+        raise AssertionError(f"Runtime RPC grants are incorrect: {checks}")
+    if table_checks != ["false","false","false"]:
+        raise AssertionError(f"Runtime role has direct Context table access: {table_checks}")
+
+
 def create_work(project_id: str, title: str, *, key: str | None = None) -> str:
     session_id = str(uuid4())
     work_id = scalar(
@@ -219,7 +245,7 @@ def test_compilation_cache_and_provenance(
         project_id, work_id, resource_id, str(uuid4()),
         "a" * 40, "b" * 40, "c" * 64,
     )
-    assert_status(unchanged, "recorded", "second session recording same pinned revision")
+    assert_status(unchanged, "unchanged", "second session recording same pinned revision")
     if unchanged["source_version"] != 1:
         raise AssertionError("same SHA/tree/hash/provenance should not create a new source version")
 
@@ -274,6 +300,11 @@ def test_compilation_cache_and_provenance(
     assert_status(reused, "ready", "authorized cached pack retrieval")
     if reused["payload"] != payload:
         raise AssertionError("cached pack retrieval changed the compiled content")
+
+    unknown_pack = fetch_pack(str(uuid4()), str(uuid4()))
+    assert_status(unknown_pack, "denied", "unknown Pack ID does not reveal Pack existence")
+    if "payload" in unknown_pack:
+        raise AssertionError("unknown Pack ID returned a Context Pack payload")
 
     stale_compiler = fetch_pack(pack_id, str(uuid4()), compiler="context-compiler/2")
     assert_status(stale_compiler, "stale", "compiler version invalidation")
@@ -424,6 +455,7 @@ def test_budget_truncation(
 
 def main() -> None:
     setup_database()
+    test_runtime_access_boundary()
     project_id, resource_id, work_id, dependency_id, graph_id, grant_decision_id, _ = setup_fixture()
     session_id = str(uuid4())
     pack_id = test_compilation_cache_and_provenance(
