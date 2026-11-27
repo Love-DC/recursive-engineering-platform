@@ -533,7 +533,8 @@ BEGIN
     WHERE source.value->>'source_kind'=p_source_kind
       AND left(p_source_ref,length(source.value->>'source_prefix'))=source.value->>'source_prefix'
       AND (
-        length(p_source_ref)=length(source.value->>'source_prefix')
+        right(source.value->>'source_prefix',1)='/'
+        OR length(p_source_ref)=length(source.value->>'source_prefix')
         OR substring(p_source_ref,length(source.value->>'source_prefix')+1,1) IN ('/','?','#')
       )
   ) INTO v_allowed;
@@ -762,7 +763,8 @@ BEGIN
     WHERE source.value->>'source_kind'=v_observation.source_kind
       AND left(v_observation.source_ref,length(source.value->>'source_prefix'))=source.value->>'source_prefix'
       AND (
-        length(v_observation.source_ref)=length(source.value->>'source_prefix')
+        right(source.value->>'source_prefix',1)='/'
+        OR length(v_observation.source_ref)=length(source.value->>'source_prefix')
         OR substring(v_observation.source_ref,length(source.value->>'source_prefix')+1,1) IN ('/','?','#')
       )
   ) INTO v_source_allowed;
