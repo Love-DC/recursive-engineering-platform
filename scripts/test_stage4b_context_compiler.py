@@ -96,6 +96,74 @@ def test_runtime_access_boundary() -> None:
         raise AssertionError(f"Runtime role has direct Context table access: {table_checks}")
 
 
+def test_authorization_locks(project_id: str, resource_id: str, grant_decision_id: str) -> None:
+    """A successful authorization holds grant/decision rows until retrieval commits."""
+    cmd = [
+        "psql", "-X", "-q", "-A", "-t", "-v", "ON_ERROR_STOP=1",
+        "-h", HOST, "-p", PORT, "-U", USER, "-d", DATABASE,
+    ]
+    env = os.environ.copy()
+    env["PGPASSWORD"] = PASSWORD
+    sql = (
+        "BEGIN;\n"
+        "SELECT aep.context_project_resource_allowed("
+        f"{lit(project_id)}::uuid,{lit(resource_id)}::uuid);\n"
+        "SELECT pg_sleep(2);\n"
+        "COMMIT;\n"
+    )
+    holder = subprocess.Popen(
+        cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, bufsize=1, env=env,
+    )
+    assert holder.stdin is not None and holder.stdout is not None
+    holder.stdin.write(sql)
+    holder.stdin.flush()
+    holder.stdin.close()
+    authorization_result = holder.stdout.readline().strip()
+    if authorization_result != "t":
+        holder.kill()
+        holder.wait()
+        raise AssertionError(
+            f"authorization holder did not acquire an approved grant: {authorization_result!r}"
+        )
+
+    grant_revoke = psql(
+        "SET lock_timeout='150ms'; "
+        "UPDATE aep.project_resources SET status='revoked',"
+        "revoked_at=clock_timestamp(),grant_version=grant_version+1 "
+        f"WHERE project_id={lit(project_id)}::uuid "
+        f"AND resource_id={lit(resource_id)}::uuid;",
+        check=False,
+    )
+    decision_revoke = psql(
+        "SET lock_timeout='150ms'; "
+        "UPDATE aep.owner_decisions SET status='rejected' "
+        f"WHERE decision_id={lit(grant_decision_id)}::uuid;",
+        check=False,
+    )
+    holder.wait(timeout=10)
+    holder_stdout = holder.stdout.read()
+    holder_stderr = holder.stderr.read() if holder.stderr else ""
+    if holder.returncode != 0:
+        raise RuntimeError(f"authorization holder failed: {holder_stdout} {holder_stderr}")
+    for label, attempt in (("ProjectResource revoke",grant_revoke),("OwnerDecision revoke",decision_revoke)):
+        if attempt.returncode == 0 or "lock timeout" not in attempt.stderr.lower():
+            raise AssertionError(
+                f"{label} was not serialized behind the active authorized retrieval: "
+                f"exit={attempt.returncode}, stderr={attempt.stderr}"
+            )
+    if scalar(
+        "SELECT status FROM aep.project_resources "
+        f"WHERE project_id={lit(project_id)}::uuid AND resource_id={lit(resource_id)}::uuid;"
+    ) != "active":
+        raise AssertionError("ProjectResource revoke unexpectedly committed during authorized retrieval")
+    if scalar(
+        "SELECT status FROM aep.owner_decisions "
+        f"WHERE decision_id={lit(grant_decision_id)}::uuid;"
+    ) != "approved":
+        raise AssertionError("OwnerDecision revoke unexpectedly committed during authorized retrieval")
+
+
 def create_work(project_id: str, title: str, *, key: str | None = None) -> str:
     session_id = str(uuid4())
     work_id = scalar(
@@ -466,6 +534,7 @@ def main() -> None:
     setup_database()
     test_runtime_access_boundary()
     project_id, resource_id, work_id, dependency_id, graph_id, grant_decision_id, _ = setup_fixture()
+    test_authorization_locks(project_id, resource_id, grant_decision_id)
     session_id = str(uuid4())
     pack_id = test_compilation_cache_and_provenance(
         project_id, resource_id, work_id, dependency_id, session_id

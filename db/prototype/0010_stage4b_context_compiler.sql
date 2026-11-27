@@ -99,39 +99,67 @@ CREATE FUNCTION aep.context_project_resource_allowed(
   p_resource_id uuid
 )
 RETURNS boolean
-LANGUAGE sql
+LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog, aep
 AS $function$
-  SELECT EXISTS (
-    SELECT 1
-    FROM aep.projects AS project_row
-    JOIN aep.project_resources AS project_resource
-      ON project_resource.project_id = project_row.project_id
-    JOIN aep.resources AS resource_row
-      ON resource_row.resource_id = project_resource.resource_id
-    LEFT JOIN aep.owner_decisions AS grant_decision
-      ON grant_decision.decision_id = project_resource.grant_decision_id
-    WHERE project_row.project_id = p_project_id
-      AND project_row.status IN ('active','paused')
-      AND project_resource.resource_id = p_resource_id
-      AND project_resource.status = 'active'
-      AND resource_row.status = 'active'
-      AND (
-        project_resource.access_mode = 'read'
-        OR (
-          project_resource.access_mode IN ('write','read_write')
-          AND grant_decision.status = 'approved'
-          AND (
-            (grant_decision.scope_type = 'project'
-              AND grant_decision.scope_key = project_resource.project_id::text)
-            OR
-            (grant_decision.scope_type = 'resource'
-              AND grant_decision.scope_key = project_resource.resource_id::text)
-          )
-        )
-      )
-  )
+DECLARE
+  v_project_status text;
+  v_resource_status text;
+  v_access_mode text;
+  v_decision_id uuid;
+  v_decision_status text;
+  v_decision_scope_type text;
+  v_decision_scope_key text;
+BEGIN
+  -- Keep the project/resource grant stable for the whole calling transaction.
+  -- A concurrent revoke/archive/status change must wait until Context retrieval
+  -- has either completed or rolled back.
+  SELECT project_row.status,resource_row.status,
+         project_resource.access_mode,project_resource.grant_decision_id
+  INTO v_project_status,v_resource_status,v_access_mode,v_decision_id
+  FROM aep.projects AS project_row
+  JOIN aep.project_resources AS project_resource
+    ON project_resource.project_id = project_row.project_id
+  JOIN aep.resources AS resource_row
+    ON resource_row.resource_id = project_resource.resource_id
+  WHERE project_row.project_id = p_project_id
+    AND project_resource.resource_id = p_resource_id
+  FOR SHARE OF project_row,project_resource,resource_row;
+
+  IF NOT FOUND
+     OR v_project_status NOT IN ('active','paused')
+     OR v_resource_status <> 'active'
+     OR v_access_mode NOT IN ('read','write','read_write') THEN
+    RETURN false;
+  END IF;
+
+  IF v_access_mode = 'read' THEN
+    RETURN true;
+  END IF;
+
+  IF v_decision_id IS NULL THEN
+    RETURN false;
+  END IF;
+
+  -- Lock the exact decision as well: changing its approval/status/scope must
+  -- wait for the current authorized retrieval transaction to finish.
+  SELECT decision_row.status,decision_row.scope_type,decision_row.scope_key
+  INTO v_decision_status,v_decision_scope_type,v_decision_scope_key
+  FROM aep.owner_decisions AS decision_row
+  WHERE decision_row.decision_id = v_decision_id
+  FOR SHARE;
+
+  IF NOT FOUND OR v_decision_status <> 'approved' THEN
+    RETURN false;
+  END IF;
+
+  RETURN (
+    (v_decision_scope_type = 'project' AND v_decision_scope_key = p_project_id::text)
+    OR
+    (v_decision_scope_type = 'resource' AND v_decision_scope_key = p_resource_id::text)
+  );
+END
 $function$;
 
 -- Internal snapshot builder. It must only be called after the project/resource
