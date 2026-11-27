@@ -105,6 +105,7 @@ SET search_path = pg_catalog, aep
 AS $function$
 DECLARE
   v_project_status text;
+  v_project_resource_status text;
   v_resource_status text;
   v_access_mode text;
   v_decision_id uuid;
@@ -115,9 +116,10 @@ BEGIN
   -- Keep the project/resource grant stable for the whole calling transaction.
   -- A concurrent revoke/archive/status change must wait until Context retrieval
   -- has either completed or rolled back.
-  SELECT project_row.status,resource_row.status,
+  SELECT project_row.status,project_resource.status,resource_row.status,
          project_resource.access_mode,project_resource.grant_decision_id
-  INTO v_project_status,v_resource_status,v_access_mode,v_decision_id
+  INTO v_project_status,v_project_resource_status,v_resource_status,
+       v_access_mode,v_decision_id
   FROM aep.projects AS project_row
   JOIN aep.project_resources AS project_resource
     ON project_resource.project_id = project_row.project_id
@@ -129,6 +131,7 @@ BEGIN
 
   IF NOT FOUND
      OR v_project_status NOT IN ('active','paused')
+     OR v_project_resource_status <> 'active'
      OR v_resource_status <> 'active'
      OR v_access_mode NOT IN ('read','write','read_write') THEN
     RETURN false;
