@@ -23,8 +23,9 @@ INSERT INTO aep.context_evidence_sizes(
 )
 SELECT evidence_id,project_id,work_id,evidence_type,observed_at,
        octet_length(payload::text),octet_length(provenance::text),
-       octet_length(evidence_type),octet_length(source_ref),
-       COALESCE(octet_length(source_revision),0)
+       octet_length(to_jsonb(evidence_type)::text),
+       octet_length(to_jsonb(source_ref)::text),
+       COALESCE(octet_length(to_jsonb(source_revision)::text),4)
 FROM aep.evidence;
 
 CREATE INDEX evidence_context_snapshot_idx
@@ -45,8 +46,9 @@ BEGIN
   ) VALUES (
     NEW.evidence_id,NEW.project_id,NEW.work_id,NEW.evidence_type,NEW.observed_at,
     octet_length(NEW.payload::text),octet_length(NEW.provenance::text),
-    octet_length(NEW.evidence_type),octet_length(NEW.source_ref),
-    COALESCE(octet_length(NEW.source_revision),0)
+    octet_length(to_jsonb(NEW.evidence_type)::text),
+    octet_length(to_jsonb(NEW.source_ref)::text),
+    COALESCE(octet_length(to_jsonb(NEW.source_revision)::text),4)
   );
   RETURN NEW;
 END
