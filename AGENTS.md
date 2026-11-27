@@ -53,6 +53,18 @@ An Owner-approved architecture baseline does not implicitly approve unresolved d
 - If verification fails, diagnose and repair or clearly record the blocker. Do not report unrun tests as passed.
 - Never expose tokens, credentials, private source code, personal information, or private project data in this public repository.
 
+## Proportional engineering and autonomous execution
+
+- Own routine discovery, prioritization, task breakdown, implementation, testing, review, remediation, and acceptance within the Owner-approved direction. Do not send routine project-management or review decisions back to the Owner.
+- Do not expand architecture or add services, registries, identity systems, workers, abstractions, or policy layers to address hypothetical future needs. Prefer the smallest change that solves a demonstrated problem using the accepted architecture.
+- Before treating a concern as a blocker, identify the violated accepted requirement, the concrete failure or threat scenario, and reproducible evidence. Clearly distinguish a demonstrated defect from optional hardening, style preference, speculative risk, or a production-only concern.
+- A PARTIAL acceptance item is not automatically a new implementation task or a blocker for the current prototype milestone. Classify it as a current-scope blocker, a production/pilot gate, an accepted limitation, or an optional future improvement. Keep production-only gates visible without forcing premature production engineering into prototype work.
+- Review scope must match change risk. Normally perform one complete review of the exact implementation candidate, then focused re-review of concrete remediations. Reopen a full review only when material code/architecture changes or a newly demonstrated defect justifies it. Documentation-only provenance or wording corrections do not restart unrelated technical reviews.
+- Do not repeat already-passed checks without a changed target, invalidated evidence, or a concrete reason. Preserve exact-SHA evidence, but avoid review rounds, test layers, reports, and acceptance gates that add no new assurance.
+- Continue unblocked work autonomously when a future Owner gate is not yet needed. Ask the Owner only for a genuine product-direction choice, irreversible/high-impact action, missing external permission/resource, or a decision explicitly reserved in the Decision Register.
+
+These are execution-governance rules. They do not weaken the accepted architecture, security invariants, applicable acceptance tests, or explicit Owner decision gates.
+
 ## Current verified implementation
 
 - **Stage 0 / Stage 1A / Stage 1B:** integrated through [PR #9](https://github.com/Love-DC/recursive-engineering-platform/pull/9), merged to main; the corresponding post-merge CI and evidence closeout are recorded in README and the roadmap.
