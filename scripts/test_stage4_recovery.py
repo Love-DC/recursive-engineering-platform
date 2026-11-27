@@ -55,13 +55,17 @@ def expect_error(sql: str, needle: str, label: str) -> None:
 
 
 def setup_database() -> None:
-    paths = sorted(MIGRATIONS.glob("*.sql"))
+    all_paths = sorted(MIGRATIONS.glob("*.sql"))
+    paths: list[Path] = []
     versions: list[int] = []
-    for path in paths:
+    for path in all_paths:
         match = re.fullmatch(r"(\d{4})_[a-z0-9_]+\.sql", path.name)
         if not match:
             raise SystemExit(f"Invalid migration filename: {path.name}")
-        versions.append(int(match.group(1)))
+        version = int(match.group(1))
+        if version <= 10:
+            paths.append(path)
+            versions.append(version)
     if versions != list(range(1, 11)):
         raise SystemExit(f"Expected contiguous migrations 0001..0010, got {versions}")
 
