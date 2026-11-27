@@ -276,8 +276,8 @@ def test_concurrent_canonical_registration(project_id: str, resource_id: str, st
     env["PGPASSWORD"] = PASSWORD
     cmd = ["psql","-X","-q","-A","-t","-v","ON_ERROR_STOP=1",
            "-h",HOST,"-p",PORT,"-U",USER,"-d",DATABASE]
-    first = subprocess.Popen(cmd+["-c",sql_a],text=True,capture_output=True,env=env)
-    second = subprocess.Popen(cmd+["-c",sql_b],text=True,capture_output=True,env=env)
+    first = subprocess.Popen(cmd+["-c",sql_a],text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=env)
+    second = subprocess.Popen(cmd+["-c",sql_b],text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=env)
     out_a,err_a = first.communicate(timeout=20)
     out_b,err_b = second.communicate(timeout=20)
     if first.returncode or second.returncode:
