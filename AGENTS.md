@@ -6,10 +6,11 @@ This file is the repository-local entry contract for every AI session working in
 
 1. Read this file first.
 2. Read [README.md](README.md) for the current verified delivery state.
-3. Read [the accepted architecture baseline](docs/ARCHITECTURE-BASELINE.md).
-4. Read [the decision register](docs/DECISION-REGISTER.md) before changing scope, permissions, deployment, or rollout.
-5. Read [the implementation roadmap](docs/IMPLEMENTATION-ROADMAP.md) and [acceptance test map](docs/ACCEPTANCE-TEST-MAP.md).
-6. Recover live work, PR, review, and CI state from [parent roadmap #2](https://github.com/Love-DC/recursive-engineering-platform/issues/2), its active linked Stage 4 work items ([umbrella #58](https://github.com/Love-DC/recursive-engineering-platform/issues/58), [T10/T11 #59](https://github.com/Love-DC/recursive-engineering-platform/issues/59), [Context Compiler #60](https://github.com/Love-DC/recursive-engineering-platform/issues/60), [T25 #61](https://github.com/Love-DC/recursive-engineering-platform/issues/61), [T19/T20 #62](https://github.com/Love-DC/recursive-engineering-platform/issues/62)), and the relevant linked PRs and exact-SHA Actions runs. Consult [Stage 3 implementation #48](https://github.com/Love-DC/recursive-engineering-platform/issues/48) and [Stage 3 documentation closeout #54](https://github.com/Love-DC/recursive-engineering-platform/issues/54) for historical delivery evidence; do not treat closed Stage 3 work as current work.
+3. Read and follow the [engineering standards](docs/ENGINEERING-STANDARDS.md).
+4. Read [the accepted architecture baseline](docs/ARCHITECTURE-BASELINE.md).
+5. Read [the decision register](docs/DECISION-REGISTER.md) before changing scope, permissions, deployment, or rollout.
+6. Read [the implementation roadmap](docs/IMPLEMENTATION-ROADMAP.md) and [acceptance test map](docs/ACCEPTANCE-TEST-MAP.md).
+7. Recover live work, PR, review, and CI state from [parent roadmap #2](https://github.com/Love-DC/recursive-engineering-platform/issues/2), its active linked Stage 4 work items ([umbrella #58](https://github.com/Love-DC/recursive-engineering-platform/issues/58), [T10/T11 #59](https://github.com/Love-DC/recursive-engineering-platform/issues/59), [Context Compiler #60](https://github.com/Love-DC/recursive-engineering-platform/issues/60), [T25 #61](https://github.com/Love-DC/recursive-engineering-platform/issues/61), [T19/T20 #62](https://github.com/Love-DC/recursive-engineering-platform/issues/62)), and the relevant linked PRs and exact-SHA Actions runs. Consult [Stage 3 implementation #48](https://github.com/Love-DC/recursive-engineering-platform/issues/48) and [Stage 3 documentation closeout #54](https://github.com/Love-DC/recursive-engineering-platform/issues/54) for historical delivery evidence; do not treat closed Stage 3 work as current work.
 
 The authoritative design source is [Architecture RFC #1, Current Design Snapshot v2.0](https://github.com/Love-DC/recursive-engineering-platform/issues/1#issuecomment-7161657103). Its Owner-acceptance provenance and preserved open decisions are recorded in [Issue #1 comment #7180060029](https://github.com/Love-DC/recursive-engineering-platform/issues/1#issuecomment-7180060029). Repository documents summarize the baseline; they must not silently weaken or expand it.
 
@@ -55,15 +56,14 @@ An Owner-approved architecture baseline does not implicitly approve unresolved d
 
 ## Proportional engineering and autonomous execution
 
-- Own routine discovery, prioritization, task breakdown, implementation, testing, review, remediation, and acceptance within the Owner-approved direction. Do not send routine project-management or review decisions back to the Owner.
-- Do not expand architecture or add services, registries, identity systems, workers, abstractions, or policy layers to address hypothetical future needs. Prefer the smallest change that solves a demonstrated problem using the accepted architecture.
-- Before treating a concern as a blocker, identify the violated accepted requirement, the concrete failure or threat scenario, and reproducible evidence. Clearly distinguish a demonstrated defect from optional hardening, style preference, speculative risk, or a production-only concern.
-- A PARTIAL acceptance item is not automatically a new implementation task or a blocker for the current prototype milestone. Classify it as a current-scope blocker, a production/pilot gate, an accepted limitation, or an optional future improvement. Keep production-only gates visible without forcing premature production engineering into prototype work.
-- Review scope must match change risk. Normally perform one complete review of the exact implementation candidate, then focused re-review of concrete remediations. Reopen a full review only when material code/architecture changes or a newly demonstrated defect justifies it. Documentation-only provenance or wording corrections do not restart unrelated technical reviews.
-- Do not repeat already-passed checks without a changed target, invalidated evidence, or a concrete reason. Preserve exact-SHA evidence, but avoid review rounds, test layers, reports, and acceptance gates that add no new assurance.
-- Continue unblocked work autonomously when a future Owner gate is not yet needed. Ask the Owner only for a genuine product-direction choice, irreversible/high-impact action, missing external permission/resource, or a decision explicitly reserved in the Decision Register.
+The binding repository-wide standard is [docs/ENGINEERING-STANDARDS.md](docs/ENGINEERING-STANDARDS.md). The primary principle is to reject over-defensive engineering: solve demonstrated problems with the smallest adequate change and scale controls to actual risk.
 
-These are execution-governance rules. They do not weaken the accepted architecture, security invariants, applicable acceptance tests, or explicit Owner decision gates.
+- A concern is not a blocker without a violated accepted requirement/current acceptance criterion and a concrete, evidence-backed failure or credible high-impact scenario.
+- Classify gaps as current-scope blockers, future/pilot/production gates, accepted limitations, or optional improvements. Only current-scope blockers stop the current task.
+- Do not import production-only gates into non-production work, demand zero risk, or add speculative services, identities, approval layers, abstractions, or test/review rounds.
+- One complete exact-candidate review followed by focused re-review of concrete fixes is the normal path. Repeat passed checks only when the target or evidence changes, or a concrete defect justifies it.
+- Continue routine work autonomously within the approved direction. Preserve accepted architecture/security invariants, explicit Owner gates, and project product boundaries.
+
 
 ## Current verified implementation
 
