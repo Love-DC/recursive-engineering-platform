@@ -393,6 +393,12 @@ DECLARE
   v_decision_scope_type text;
   v_decision_scope_key text;
 BEGIN
+  -- Resource locks precede project locks for a globally consistent order.
+  -- A resource-scoped decision or physical Resource update may affect every
+  -- project linked to this Resource; association inserts/removals participate
+  -- in the same Resource lock before their project lock.
+  PERFORM aep.lock_context_resource(ARRAY[p_resource_id], false);
+
   -- Context snapshots and relevant writes share a project-scoped advisory lock.
   -- Source-revision recording requests an exclusive lock; compile/fetch request
   -- a shared lock. The lock remains held until the caller's transaction ends.
