@@ -1,5 +1,7 @@
 # Work Registry, coordination model, and Stage 2A–Stage 4D protocol prototypes
 
+For the supported non-production hosted Supabase A0 install path, apply `db/supabase/0000_supabase_compat.sql` first and follow [`db/supabase/README.md`](../supabase/README.md). The prototype migrations remain unsuitable for direct, unadapted deployment or production use.
+
 This directory contains disposable PostgreSQL experiments for the Stage 1A/1B data model and the Stage 2A, Stage 2B, Stage 3, Stage 4A recovery, Stage 4B Context Compiler/Context Packs, Stage 4C evidence-derived memory, and Stage 4D bounded discovery protocols.
 
 ## Implemented
@@ -63,7 +65,7 @@ Migration `0009_stage4_session_recovery.sql` adds:
 
 This is a **trusted single-Owner test prototype**, not a production Supabase migration or production authorization interface.
 
-- Disposable GitHub Actions PostgreSQL 17.12 only. No existing Supabase project or legacy RAE database has been accessed or modified.
+- Prototype CI suites remain on disposable GitHub Actions PostgreSQL 17.12. A separate isolated, non-production Supabase PostgreSQL 17.12 instance was used for A0 activation on 2026-11-27 through the compatibility bootstrap in `db/supabase/`; the retired RAE Supabase project was not accessed or modified.
 - The permanent Resource DELETE trigger protects against ordinary runtime-role operations, not a privileged PostgreSQL administrator: a superuser or sufficiently privileged schema/table owner can deliberately disable triggers or alter the schema. The trusted single-Owner prototype does not defend against a hostile database administrator.
 - Role creation assumes a disposable PostgreSQL administrator connection. It is not intended to run unchanged against an existing Supabase project.
 - The database fence does not revoke shared GitHub/MCP credentials or prevent every stale external side effect.
