@@ -386,9 +386,14 @@ def test_budgets_and_resume(project_id: str, resource_id: str, stable_id: str) -
     p5 = start_pass(project_id,resource_id,stable_id,session_id=session5,budget=limits(max_no_progress=1))
     _,no_progress,_ = record_call(project_id,resource_id,stable_id,p5["pass_id"],session5,
         key="no-progress",cursor_before={"page":1},cursor_after={"page":2},
-        candidate={"action":"skip","reason":"duplicate_or_not_actionable"})
-    if no_progress.get("stop_reason")!="no_progress" or no_progress.get("resume_cursor")!={"page":2}:
-        raise AssertionError(f"No-progress guard did not persist a resumable cursor: {no_progress}")
+        candidate={
+            "action":"skip","candidate_key":"candidate:skip-not-actionable",
+            "reason":"duplicate_or_not_actionable"
+        })
+    if (no_progress.get("stop_reason")!="no_progress"
+            or no_progress.get("resume_cursor")!={"page":2}
+            or not no_progress.get("candidate_fingerprint")):
+        raise AssertionError(f"Skipped candidate fingerprint/no-progress state was not persisted: {no_progress}")
     blocked_session = str(uuid4())
     blocked_resume = start_pass(project_id,resource_id,stable_id,session_id=blocked_session,
         budget=limits(max_no_progress=1),resume_from=p5["pass_id"])
