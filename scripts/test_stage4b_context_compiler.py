@@ -489,6 +489,130 @@ def test_resource_scope_serialization(existing_project_id: str) -> None:
                 proc.wait()
 
 
+
+def _approved_graph_member_decision(project_id: str, graph_id: str) -> str:
+    decision_key = f"dependency_graph:{graph_id}:write"
+    return scalar(
+        "INSERT INTO aep.owner_decisions("
+        "scope_type,scope_key,decision_key,statement,decision_version,status,"
+        "approval_source_kind,approval_source_ref,approver_principal,"
+        "approval_provenance,approved_at"
+        ") VALUES("
+        f"'project',{lit(project_id)},{lit(decision_key)},"
+        "'Test-only shared dependency graph write membership',1,'approved',"
+        "'direct_owner_message','test://owner/stage4b-batch','test-owner',"
+        "jsonb_build_object('direct_owner_confirmation',true),clock_timestamp()"
+        ") RETURNING decision_id;"
+    )
+
+
+def test_dependency_batch_lock_order(project_ids: list[str]) -> None:
+    """Force reversed multi-edge batches to contend after their first edge lock set."""
+    project_a, project_b, project_c = sorted(project_ids)
+    graph_one = scalar(
+        "SELECT aep.create_dependency_graph("
+        f"{lit(project_a)}::uuid);"
+    )
+    graph_two = scalar(
+        "SELECT aep.create_dependency_graph("
+        f"{lit(project_a)}::uuid);"
+    )
+    for graph_id in (graph_one, graph_two):
+        for project_id in (project_b, project_c):
+            decision_id = _approved_graph_member_decision(project_id, graph_id)
+            scalar(
+                "SELECT aep.set_dependency_graph_member("
+                f"{lit(graph_id)}::uuid,{lit(project_id)}::uuid,'write',"
+                f"{lit(decision_id)}::uuid);"
+            )
+
+    groups: list[tuple[str,list[dict[str,str]]]] = []
+    for index, graph_id in enumerate((graph_one,graph_two)):
+        a_work = create_work(project_a, f"Batch {index} project A source")
+        b_work = create_work(project_b, f"Batch {index} project B source")
+        c_work = create_work(project_c, f"Batch {index} project C target")
+        edge_a = {"op":"add","source_work_id":a_work,"target_work_id":c_work}
+        edge_b = {"op":"add","source_work_id":b_work,"target_work_id":c_work}
+        groups.append((graph_id,[edge_a,edge_b] if index == 0 else [edge_b,edge_a]))
+
+    barrier_key = int(uuid4().hex[:15],16)
+    controller = _start_psql(
+        "stage4b_dependency_batch_barrier",
+        f"SELECT pg_advisory_lock({barrier_key}::bigint);\n"
+        "SELECT 'dependency_batch_barrier_ready';\n",
+        keep_stdin_open=True,
+    )
+    assert controller.stdin is not None and controller.stdout is not None
+    if controller.stdout.readline().strip() != "dependency_batch_barrier_ready":
+        controller.kill()
+        controller.wait()
+        raise AssertionError("dependency batch test could not acquire its advisory barrier")
+
+    first_app = "stage4b_batch_first_" + str(uuid4()).replace("-", "")
+    second_app = "stage4b_batch_second_" + str(uuid4()).replace("-", "")
+    pause_function = "ctx_test_pause_" + str(uuid4()).replace("-", "")
+    pause_trigger = "zz_test_pause_" + str(uuid4()).replace("-", "")
+    psql(
+        f"CREATE FUNCTION aep.{pause_function}() RETURNS trigger "
+        "LANGUAGE plpgsql SET search_path=pg_catalog,aep AS $function$ "
+        f"BEGIN IF current_setting('application_name',true)={lit(first_app)} "
+        f"THEN PERFORM pg_advisory_xact_lock({barrier_key}::bigint); END IF; "
+        "RETURN NEW; END $function$;"
+        f"CREATE TRIGGER {pause_trigger} BEFORE INSERT ON aep.work_relations "
+        f"FOR EACH ROW EXECUTE FUNCTION aep.{pause_function}();"
+    )
+
+    def start_batch(app: str, graph_id: str, operations: list[dict[str,str]]) -> subprocess.Popen[str]:
+        request_key = "stage4b-batch-" + str(uuid4())
+        return _start_psql(
+            app,
+            "SELECT aep.mutate_dependencies("
+            f"{lit(graph_id)}::uuid,{lit(request_key)},{json_sql(operations)});\n",
+        )
+
+    first = start_batch(first_app,groups[0][0],groups[0][1])
+    second = None
+    try:
+        # The test trigger fires after the normal per-edge project locks.
+        _wait_for_advisory_wait(first_app)
+        second = start_batch(second_app,groups[1][0],groups[1][1])
+        # With per-edge lock accumulation, the second batch owns B while
+        # waiting on C; the first then waits for B on its second edge.
+        # The wrapper must instead have the second batch wait before taking B.
+        _wait_for_advisory_wait(second_app)
+        controller.stdin.write(f"SELECT pg_advisory_unlock({barrier_key}::bigint);\n")
+        controller.stdin.flush()
+        controller.stdin.close()
+        controller.wait(timeout=5)
+
+        first.wait(timeout=12)
+        second.wait(timeout=12)
+        first_out = first.stdout.read() if first.stdout else ""
+        first_err = first.stderr.read() if first.stderr else ""
+        second_out = second.stdout.read() if second.stdout else ""
+        second_err = second.stderr.read() if second.stderr else ""
+        if first.returncode != 0 or second.returncode != 0:
+            raise AssertionError(
+                "Reversed dependency batches deadlocked or failed: "
+                f"first={first.returncode} {first_out} {first_err}; "
+                f"second={second.returncode} {second_out} {second_err}"
+            )
+        for output in (first_out,second_out):
+            try:
+                result = json.loads(output.strip())
+            except json.JSONDecodeError as exc:
+                raise AssertionError(f"Dependency mutation returned invalid JSON: {output}") from exc
+            if result.get("added") != 2:
+                raise AssertionError(f"Dependency batch did not add both edges: {result}")
+    finally:
+        for proc in (controller,first,second):
+            if proc is not None and proc.poll() is None:
+                proc.kill()
+                proc.wait()
+        psql(f"DROP TRIGGER IF EXISTS {pause_trigger} ON aep.work_relations;")
+        psql(f"DROP FUNCTION IF EXISTS aep.{pause_function}();")
+
+
 def create_work(project_id: str, title: str, *, key: str | None = None) -> str:
     session_id = str(uuid4())
     work_id = scalar(
@@ -995,6 +1119,15 @@ def main() -> None:
         project_id, resource_id, work_id, dependency_id,
         session_id, pack_id, grant_decision_id
     )
+    batch_projects = [
+        scalar(
+            "INSERT INTO aep.projects(project_key,name) "
+            "VALUES('stage4b-batch-' || substr(gen_random_uuid()::text,1,8),"
+            "'Stage 4B dependency batch fixture') RETURNING project_id;"
+        )
+        for _ in range(3)
+    ]
+    test_dependency_batch_lock_order(batch_projects)
     # Run the budget test before deliberately revoking the project/resource grant.
     # A fresh independent fixture keeps the denied-project attack path isolated.
     project_2, resource_2, work_2, _, _, _, _ = setup_fixture()
