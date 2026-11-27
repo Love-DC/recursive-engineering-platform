@@ -389,6 +389,14 @@ def test_budgets_and_resume(project_id: str, resource_id: str, stable_id: str) -
         candidate={"action":"skip","reason":"duplicate_or_not_actionable"})
     if no_progress.get("stop_reason")!="no_progress" or no_progress.get("resume_cursor")!={"page":2}:
         raise AssertionError(f"No-progress guard did not persist a resumable cursor: {no_progress}")
+    blocked_session = str(uuid4())
+    blocked_resume = start_pass(project_id,resource_id,stable_id,session_id=blocked_session,
+        budget=limits(max_no_progress=1),resume_from=p5["pass_id"])
+    blocked_call = reserve(project_id,resource_id,stable_id,blocked_resume["pass_id"],
+        blocked_session,cursor={"page":2})
+    if blocked_call.get("reason")!="no_progress":
+        raise AssertionError(f"Exhausted no-progress budget must stop before another read: {blocked_call}")
+
     resumed_session = str(uuid4())
     resumed_no_progress = start_pass(project_id,resource_id,stable_id,session_id=resumed_session,
         budget=limits(max_no_progress=2),resume_from=p5["pass_id"])
