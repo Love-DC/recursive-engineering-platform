@@ -93,3 +93,5 @@ jobs:
         run: python scripts/test_stage4b_context_compiler.py
       - name: Run Stage 4C deterministic evidence-derived memory tests
         run: python scripts/test_stage4c_derived_memory.py
+      - name: Run Stage 4D active-session bounded discovery tests
+        run: python scripts/test_stage4d_discovery.py
