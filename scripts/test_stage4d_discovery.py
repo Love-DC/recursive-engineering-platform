@@ -410,6 +410,71 @@ def test_budgets_and_resume(project_id: str, resource_id: str, stable_id: str) -
         raise AssertionError(f"Repeated no-progress across sessions did not stop: {no_progress_again}")
 
 
+def test_interrupted_reservation_recovery(
+    project_id: str, resource_id: str, stable_id: str
+) -> None:
+    old_session = str(uuid4())
+    old_pass = start_pass(project_id,resource_id,stable_id,session_id=old_session)
+    call_key = "interrupted-read"
+    source_ref = f"github://github.com/{stable_id}/issues/77"
+    reservation = json_result(
+        "SELECT aep.reserve_discovery_call("
+        f"{lit(project_id)}::uuid,{lit(resource_id)}::uuid,{lit(old_pass['pass_id'])}::uuid,"
+        f"{lit(old_session)}::uuid,{lit(call_key)},'github_fetch_issue','issue',"
+        f"{lit(source_ref)},{json_sql({'page':1})},100,80);"
+    )
+    assert_status(reservation,"reserved","interrupted tool-call reservation")
+
+    evidence_before = scalar(
+        "SELECT count(*) FROM aep.evidence WHERE project_id="
+        f"{lit(project_id)}::uuid AND evidence_type='discovery_observation';"
+    )
+    new_session = str(uuid4())
+    resumed = start_pass(
+        project_id,resource_id,stable_id,session_id=new_session,
+        budget=limits(max_tool_calls=10),resume_from=old_pass["pass_id"]
+    )
+    assert_status(resumed,"running","new-session recovery of in-flight read")
+    if (resumed.get("tool_calls_used") != 1 or resumed.get("tokens_used") != 100
+            or resumed.get("cost_used_micros") != 80
+            or resumed.get("resume_cursor") != {"page":1}):
+        raise AssertionError(f"Recovery must retain reserved budget and retry the pre-read cursor: {resumed}")
+
+    # The old session may still return, but its stopped pass fences the late result
+    # before it can append Evidence or create/link canonical Work.
+    late_result = json_result(complete_sql(
+        project_id,resource_id,old_pass["pass_id"],old_session,call_key,source_ref,
+        cursor_after={"page":2},resume_cursor={"page":2},
+        candidate=candidate("late-result:must-be-ignored","Late result"),
+    ))
+    assert_status(late_result,"stopped","late completion from superseded session")
+    evidence_after_late = scalar(
+        "SELECT count(*) FROM aep.evidence WHERE project_id="
+        f"{lit(project_id)}::uuid AND evidence_type='discovery_observation';"
+    )
+    if evidence_after_late != evidence_before:
+        raise AssertionError("A late result from the superseded session created Evidence")
+
+    late_fingerprint = __import__("hashlib").sha256(
+        f"{project_id}|discovery_candidate_v1|late-result:must-be-ignored".encode()
+    ).hexdigest()
+    late_work_count = scalar(
+        "SELECT count(*) FROM aep.works WHERE project_id="
+        f"{lit(project_id)}::uuid AND identity_kind='discovery_candidate_v1' "
+        f"AND identity_key={lit(late_fingerprint)};"
+    )
+    if late_work_count != "0":
+        raise AssertionError("A late result from the superseded session created canonical Work")
+
+    _,retry_result,_ = record_call(
+        project_id,resource_id,stable_id,resumed["pass_id"],new_session,
+        key="retry-interrupted-read",cursor_before={"page":1},cursor_after={"page":2},
+        candidate={"action":"skip","reason":"replayed_read_after_session_recovery"}
+    )
+    if retry_result.get("status") not in ("recorded","stopped") or retry_result.get("decision")!="skipped":
+        raise AssertionError(f"New session could not retry the interrupted read: {retry_result}")
+
+
 def test_depth_and_fanout(project_id: str, resource_id: str, stable_id: str) -> None:
     # A depth stop preserves the current source cursor; a later pass can accept it.
     session = str(uuid4())
@@ -478,6 +543,31 @@ def test_read_only_owner_gate_and_queue(project_id: str, resource_id: str, stabl
     if count!="0":
         raise AssertionError(f"Read-only grant registered {count} Work rows")
 
+    # Owner-retained/product decisions preserve candidate identity/evidence but do not
+    # become executable implementation Work without an explicit Owner decision.
+    owner_session = str(uuid4())
+    owner_pass = start_pass(project_id,resource_id,stable_id,session_id=owner_session)
+    _,owner_required,_ = record_call(
+        project_id,resource_id,stable_id,owner_pass["pass_id"],owner_session,
+        key="owner-retained-decision",cursor_before={"page":1},cursor_after={"page":2},
+        candidate={
+            "action":"approval_required",
+            "candidate_key":"owner-retained:product-policy",
+            "reason":"owner_retained_product_decision",
+        }
+    )
+    if (owner_required.get("decision")!="approval_required"
+            or owner_required.get("reason")!="owner_retained_product_decision"
+            or not owner_required.get("candidate_fingerprint")
+            or owner_required.get("work_id") is not None):
+        raise AssertionError(f"Owner-retained candidate was not durably held for approval: {owner_required}")
+    owner_evidence = scalar(
+        "SELECT provenance->>'candidate_fingerprint' FROM aep.evidence WHERE evidence_id="
+        f"{lit(owner_required['evidence_id'])}::uuid;"
+    )
+    if owner_evidence != owner_required["candidate_fingerprint"]:
+        raise AssertionError("Approval-required Evidence did not preserve the candidate fingerprint")
+
     # The active Work queue blocks new discovery before any source call is reserved.
     ready_work = scalar(
         "SELECT work_id::text FROM aep.register_work("
@@ -538,6 +628,7 @@ def main() -> None:
     project_id,resource_id,stable_id = setup_scope(access_mode="write")
     test_concurrent_canonical_registration(project_id,resource_id,stable_id)
     test_budgets_and_resume(project_id,resource_id,stable_id)
+    test_interrupted_reservation_recovery(project_id,resource_id,stable_id)
     test_depth_and_fanout(project_id,resource_id,stable_id)
     test_read_only_owner_gate_and_queue(project_id,resource_id,stable_id)
     test_revocation_before_payload_read()
