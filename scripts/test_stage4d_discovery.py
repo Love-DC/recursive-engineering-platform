@@ -484,6 +484,14 @@ def test_interrupted_reservation_recovery(
             or resumed.get("resume_cursor") != {"page":1}):
         raise AssertionError(f"Recovery must retain reserved budget and retry the pre-read cursor: {resumed}")
 
+    late_reservation_replay = json_result(
+        "SELECT aep.reserve_discovery_call("
+        f"{lit(project_id)}::uuid,{lit(resource_id)}::uuid,{lit(old_pass['pass_id'])}::uuid,"
+        f"{lit(old_session)}::uuid,{lit(call_key)},'github_fetch_issue','issue',"
+        f"{lit(source_ref)},{json_sql({'page':1})},100,80);"
+    )
+    assert_status(late_reservation_replay,"stopped","old-session reservation replay after takeover")
+
     # The old session may still return, but its stopped pass fences the late result
     # before it can append Evidence or create/link canonical Work.
     late_result = json_result(complete_sql(
