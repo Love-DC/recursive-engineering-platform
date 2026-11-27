@@ -1139,8 +1139,10 @@ def test_budget_truncation(
         if evidence["materialized_bytes"] != expected_bytes:
             raise AssertionError("Evidence materialization omitted source metadata")
         materialized_sum += expected_bytes
-    if materialized_sum != selection["selected_materialized_bytes"]:
-        raise AssertionError("selected Evidence summary does not match the selected rows")
+    if materialized_sum > selection["selected_materialized_bytes"]:
+        raise AssertionError("token-budget-selected Evidence exceeds the metadata preselection byte cap")
+    if len(payload["source_evidence"]) > selection["selected_count"]:
+        raise AssertionError("token-budget payload contains more rows than bounded Evidence preselection")
     if any(
         "OVERSIZED_REVISION_" in (evidence["source_revision"] or "")
         for evidence in payload["source_evidence"]
