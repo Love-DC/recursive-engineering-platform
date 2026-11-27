@@ -204,7 +204,7 @@ DECLARE
 BEGIN
   -- Association writes, physical Resource updates and resource-scoped decisions
   -- serialize on the stable Resource ID before deriving the current project set.
-  IF TG_TABLE_NAME IN ('project_resources','resources','work_resource_requirements') THEN
+  IF TG_TABLE_NAME IN ('project_resources','resources') THEN
     IF TG_OP <> 'DELETE' THEN
       v_resource_ids := array_append(v_resource_ids, NEW.resource_id);
     END IF;
@@ -234,7 +234,7 @@ BEGIN
 
   IF TG_TABLE_NAME IN (
     'projects','works','evidence','project_resources',
-    'work_resource_requirements','context_source_heads'
+    'context_source_heads'
   ) THEN
     IF TG_OP <> 'DELETE' THEN
       v_project_ids := array_append(v_project_ids, NEW.project_id);
@@ -372,6 +372,195 @@ BEGIN
   END LOOP;
 END
 $context_write_locks$;
+
+-- WorkResourceRequirement validation historically locked Work, then Resource.
+-- Keep that tuple order explicit and acquire Context's Resource/Project advisory
+-- locks only after Work is locked, avoiding a project-lock -> Work-tuple cycle.
+DROP TRIGGER context_project_write_lock ON aep.work_resource_requirements;
+
+CREATE OR REPLACE FUNCTION aep.guard_work_resource_requirement()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, aep
+AS $function$
+DECLARE
+  v_work_id uuid;
+  v_work aep.works%ROWTYPE;
+  v_resource aep.resources%ROWTYPE;
+  v_resource_ids uuid[];
+BEGIN
+  IF TG_OP = 'UPDATE'
+     AND (
+       NEW.work_id IS DISTINCT FROM OLD.work_id
+       OR NEW.project_id IS DISTINCT FROM OLD.project_id
+     ) THEN
+    RAISE EXCEPTION 'WorkResourceRequirement cannot move between Works or projects'
+      USING ERRCODE = '55000';
+  END IF;
+
+  IF TG_OP = 'DELETE' THEN
+    v_work_id := OLD.work_id;
+    v_resource_ids := ARRAY[OLD.resource_id];
+  ELSE
+    v_work_id := NEW.work_id;
+    v_resource_ids := ARRAY[NEW.resource_id];
+    IF TG_OP = 'UPDATE' THEN
+      v_resource_ids := array_append(v_resource_ids, OLD.resource_id);
+    END IF;
+  END IF;
+
+  SELECT work_row.* INTO v_work
+  FROM aep.works AS work_row
+  WHERE work_row.work_id = v_work_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'WorkResourceRequirement references an unknown Work'
+      USING ERRCODE = '23503';
+  END IF;
+
+  -- Fixed order for this table: Work tuple -> sorted Resource lock(s) -> Project lock.
+  PERFORM aep.lock_context_resource(v_resource_ids, true);
+  PERFORM pg_advisory_xact_lock(
+    hashtextextended('aep.context-project:' || v_work.project_id::text, 0)
+  );
+
+  IF v_work.fence_generation <> 0
+     OR v_work.current_execution_id IS NOT NULL
+     OR v_work.status NOT IN ('proposed', 'ready') THEN
+    RAISE EXCEPTION 'WorkResourceRequirement is immutable after execution begins'
+      USING ERRCODE = '55000';
+  END IF;
+
+  IF TG_OP <> 'DELETE' THEN
+    IF v_work.project_id <> NEW.project_id THEN
+      RAISE EXCEPTION 'WorkResourceRequirement project must match its Work'
+        USING ERRCODE = '23503';
+    END IF;
+
+    -- Resource mutations use the matching advisory lock before changing status;
+    -- use an MVCC read here rather than waiting on a tuple held by that writer.
+    SELECT resource_row.* INTO v_resource
+    FROM aep.resources AS resource_row
+    WHERE resource_row.resource_id = NEW.resource_id;
+
+    IF NOT FOUND OR v_resource.status <> 'active'
+       OR v_resource.provider <> 'github'
+       OR v_resource.resource_type <> 'repository'
+       OR NOT aep.is_canonical_github_branch_ref(NEW.resource_ref) THEN
+      RAISE EXCEPTION 'WorkResourceRequirement requires an active GitHub repository and canonical fully-qualified branch ref'
+        USING ERRCODE = '23514',
+              CONSTRAINT = 'work_resource_requirements_github_branch_ref_ck';
+    END IF;
+    RETURN NEW;
+  END IF;
+
+  RETURN OLD;
+END
+$function$;
+
+-- The bulk replacement API owns the full lock set. It takes the Work tuple
+-- first (as before), then all old/new Resource locks in sorted order, then the
+-- Project lock, before issuing per-row DELETE/INSERT operations.
+CREATE OR REPLACE FUNCTION aep.set_work_resource_requirements(
+  p_work_id uuid,
+  p_requirements jsonb
+)
+RETURNS integer
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, aep
+AS $function$
+DECLARE
+  v_work aep.works%ROWTYPE;
+  v_count integer;
+  v_resource_ids uuid[];
+BEGIN
+  IF p_work_id IS NULL OR p_requirements IS NULL THEN
+    RAISE EXCEPTION 'work_id and requirements array are required'
+      USING ERRCODE = '22004';
+  END IF;
+  IF jsonb_typeof(p_requirements) <> 'array' THEN
+    RAISE EXCEPTION 'requirements must be a JSON array'
+      USING ERRCODE = '22023';
+  END IF;
+  IF EXISTS (
+    SELECT 1
+    FROM jsonb_array_elements(p_requirements) AS item(value)
+    WHERE jsonb_typeof(item.value) <> 'object'
+       OR NOT (item.value ? 'resource_id')
+       OR NOT (item.value ? 'resource_ref')
+       OR jsonb_typeof(item.value->'resource_id') <> 'string'
+       OR jsonb_typeof(item.value->'resource_ref') <> 'string'
+       OR EXISTS (
+         SELECT 1
+         FROM jsonb_object_keys(item.value) AS field(key)
+         WHERE field.key NOT IN ('resource_id', 'resource_ref')
+       )
+  ) THEN
+    RAISE EXCEPTION 'each requirement must contain only string resource_id and resource_ref fields'
+      USING ERRCODE = '22023';
+  END IF;
+
+  SELECT work_row.* INTO v_work
+  FROM aep.works AS work_row
+  WHERE work_row.work_id = p_work_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Work does not exist' USING ERRCODE = '23503';
+  END IF;
+  IF v_work.fence_generation <> 0
+     OR v_work.current_execution_id IS NOT NULL
+     OR v_work.status NOT IN ('proposed', 'ready') THEN
+    RAISE EXCEPTION 'Work resource requirements are immutable after execution begins'
+      USING ERRCODE = '55000';
+  END IF;
+
+  SELECT COALESCE(array_agg(DISTINCT resource_id ORDER BY resource_id),
+                  ARRAY[]::uuid[])
+  INTO v_resource_ids
+  FROM (
+    SELECT requirement.resource_id
+    FROM aep.work_resource_requirements AS requirement
+    WHERE requirement.work_id = p_work_id
+    UNION
+    SELECT (item.value->>'resource_id')::uuid
+    FROM jsonb_array_elements(p_requirements) AS item(value)
+  ) AS resource_union;
+
+  PERFORM aep.lock_context_resource(v_resource_ids, true);
+  PERFORM pg_advisory_xact_lock(
+    hashtextextended('aep.context-project:' || v_work.project_id::text, 0)
+  );
+
+  DELETE FROM aep.work_resource_requirements AS requirement
+  WHERE requirement.work_id = p_work_id;
+
+  INSERT INTO aep.work_resource_requirements(
+    project_id, work_id, resource_id, resource_ref,
+    write_set_kind, conflict_key, normalized_write_set
+  )
+  SELECT
+    v_work.project_id,
+    p_work_id,
+    requirement.resource_id,
+    requirement.resource_ref,
+    'repository_ref',
+    '*',
+    '[]'::jsonb
+  FROM jsonb_to_recordset(p_requirements)
+    AS requirement(resource_id uuid, resource_ref text)
+  ORDER BY requirement.resource_id, requirement.resource_ref;
+
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+  RETURN v_count;
+END
+$function$;
+
+ALTER FUNCTION aep.guard_work_resource_requirement() OWNER TO aep_owner;
+ALTER FUNCTION aep.set_work_resource_requirements(uuid,jsonb) OWNER TO aep_owner;
 
 CREATE FUNCTION aep.context_project_resource_allowed(
   p_project_id uuid,
