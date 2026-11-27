@@ -147,7 +147,7 @@ def reserve(
         f"{lit(project_id)}::uuid,{lit(resource_id)}::uuid,{lit(pass_id)}::uuid,"
         f"{lit(session_id)}::uuid,{lit(call_key or ('call-'+uuid4().hex))},"
         "'github_fetch_issue','issue',"
-        f"{lit(f'github://github.com/test/issues/{uuid4().hex[:8]}')},"
+        f"{lit(f'github://github.com/{stable_id}/issues/{uuid4().hex[:8]}')},"
         f"{json_sql(cursor or {'page':1})},{estimated_tokens},{estimated_cost});"
     )
 
@@ -461,7 +461,7 @@ def test_revocation_before_payload_read() -> None:
         "SELECT aep.reserve_discovery_call("
         f"{lit(project_id)}::uuid,{lit(resource_id)}::uuid,{lit(p['pass_id'])}::uuid,"
         f"{lit(session)}::uuid,{lit(call_key)},'github_fetch_issue','issue',"
-        f"{lit(source_ref)},'{"{"}"page":1{"}"}'::jsonb,100,100);"
+        f"{lit(source_ref)},{json_sql({'page':1})},100,100);"
     )
     assert_status(reserved,"reserved","pre-revocation read reservation")
     before = scalar(
