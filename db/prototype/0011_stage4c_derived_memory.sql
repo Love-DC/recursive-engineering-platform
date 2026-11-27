@@ -292,17 +292,18 @@ BEGIN
     RETURN jsonb_build_object('status','denied','reason','project_scope_unavailable','source_count',0);
   END IF;
 
-  -- Reuse the existing bounded Evidence selection and provenance rules.
-  v_snapshot := aep.build_context_pack_snapshot_stage4b(
-    p_project_id,p_work_id,p_resource_id,p_resource_ref
-  );
-
-  -- Rebuilds for this exact scope serialize after authorization. Source writers
-  -- already hold the exclusive Resource/Project lock before their row changes.
+  -- Rebuilds for this exact scope serialize after authorization and before
+  -- reading the source snapshot. Source writers hold the exclusive Resource/Project
+  -- lock; this additional key serializes concurrent rebuilds of the same projection.
   PERFORM pg_advisory_xact_lock(hashtextextended(
     'aep.derived-memory:' || p_project_id::text || ':' || p_work_id::text
       || ':' || p_resource_id::text || ':' || p_resource_ref,0
   ));
+
+  -- Reuse the existing bounded Evidence selection and provenance rules.
+  v_snapshot := aep.build_context_pack_snapshot_stage4b(
+    p_project_id,p_work_id,p_resource_id,p_resource_ref
+  );
 
   SELECT ARRAY(
     SELECT DISTINCT source_work_id
@@ -586,10 +587,61 @@ SET search_path = pg_catalog, aep
 AS $function$
 DECLARE
   v_snapshot jsonb;
+  v_source_work_ids uuid[];
+  v_evidence_manifest jsonb;
+  v_source_snapshot jsonb;
   v_memory jsonb;
 BEGIN
   v_snapshot := aep.build_context_pack_snapshot_stage4b(
     p_project_id,p_work_id,p_resource_id,p_resource_ref
+  );
+
+  -- A ready flag alone is not sufficient: compare the exact pinned source
+  -- snapshot again so a concurrent or missed invalidation can never leak stale
+  -- memory into a newly compiled Context Pack.
+  SELECT ARRAY(
+    SELECT DISTINCT source_work_id
+    FROM (
+      SELECT p_work_id AS source_work_id
+      UNION ALL
+      SELECT (dependency_row.value->>'target_work_id')::uuid
+      FROM jsonb_array_elements(COALESCE(v_snapshot->'dependencies','[]'::jsonb))
+        AS dependency_row(value)
+    ) AS source_work_rows
+    ORDER BY source_work_id
+  ) INTO v_source_work_ids;
+
+  SELECT COALESCE(jsonb_agg(jsonb_build_object(
+    'evidence_id',evidence_row.value->'evidence_id',
+    'work_id',evidence_row.value->'work_id',
+    'evidence_type',evidence_row.value->'evidence_type',
+    'source_ref',evidence_row.value->'source_ref',
+    'source_revision',evidence_row.value->'source_revision',
+    'content_sha256',evidence_row.value->'content_sha256',
+    'payload_sha256',evidence_row.value->'payload_sha256',
+    'observed_at',evidence_row.value->'observed_at',
+    'valid_at',evidence_row.value->'valid_at'
+  ) ORDER BY evidence_row.value->>'observed_at' DESC,
+             evidence_row.value->>'evidence_id' DESC),'[]'::jsonb)
+  INTO v_evidence_manifest
+  FROM jsonb_array_elements(COALESCE(v_snapshot->'evidence','[]'::jsonb))
+    AS evidence_row(value);
+
+  v_source_snapshot := jsonb_build_object(
+    'project_id',p_project_id,
+    'work_id',p_work_id,
+    'resource_id',p_resource_id,
+    'resource_ref',p_resource_ref,
+    'project',v_snapshot->'project',
+    'work',v_snapshot->'work',
+    'dependencies',v_snapshot->'dependencies',
+    'resource',v_snapshot->'resource',
+    'project_resource_grant',v_snapshot->'project_resource_grant',
+    'repository_revision',v_snapshot->'repository_revision',
+    'source_work_ids',to_jsonb(v_source_work_ids),
+    'decisions',v_snapshot->'decisions',
+    'evidence_summary',v_snapshot->'evidence_summary',
+    'source_evidence',v_evidence_manifest
   );
 
   SELECT COALESCE(jsonb_agg(jsonb_build_object(
@@ -609,7 +661,8 @@ BEGIN
     AND memory_row.work_id=p_work_id
     AND memory_row.resource_id=p_resource_id
     AND memory_row.resource_ref=p_resource_ref
-    AND memory_row.status='ready';
+    AND memory_row.status='ready'
+    AND memory_row.source_snapshot=v_source_snapshot;
 
   RETURN v_snapshot || jsonb_build_object('derived_memory',v_memory);
 END
