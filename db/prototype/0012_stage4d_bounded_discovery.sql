@@ -212,6 +212,8 @@ DECLARE
   v_prefix text;
   v_kind text;
   v_source record;
+  v_reserved_observation aep.discovery_observations%ROWTYPE;
+  v_has_reserved_observation boolean := false;
   v_max_depth integer;
   v_max_fanout integer;
   v_max_tool_calls integer;
@@ -304,16 +306,59 @@ BEGIN
     WHERE pass_id=p_resume_from_pass_id
     FOR UPDATE;
     IF NOT FOUND OR v_prior.project_id<>p_project_id
-       OR v_prior.resource_id<>p_resource_id OR v_prior.status<>'stopped' THEN
-      RAISE EXCEPTION 'Resume requires a stopped pass for the same project and Resource'
+       OR v_prior.resource_id<>p_resource_id
+       OR v_prior.status NOT IN ('running','stopped') THEN
+      RAISE EXCEPTION 'Resume requires a running/stopped pass for the same project and Resource'
         USING ERRCODE = '22023';
     END IF;
-    IF EXISTS (
-      SELECT 1 FROM aep.discovery_observations
-      WHERE pass_id=v_prior.pass_id AND status='reserved'
-    ) THEN
-      RAISE EXCEPTION 'Cannot resume while a discovery tool call remains reserved'
+    IF p_session_id=v_prior.session_id THEN
+      RAISE EXCEPTION 'A resumed pass requires a new active-session ID'
+        USING ERRCODE = '22023';
+    END IF;
+    SELECT * INTO v_reserved_observation
+    FROM aep.discovery_observations
+    WHERE pass_id=v_prior.pass_id AND status='reserved'
+    FOR UPDATE;
+    v_has_reserved_observation := FOUND;
+    IF v_prior.status='running' AND NOT v_has_reserved_observation THEN
+      RETURN jsonb_build_object(
+        'status','active_session_may_still_be_running',
+        'pass_id',v_prior.pass_id,
+        'current_cursor',v_prior.current_cursor
+      );
+    END IF;
+    IF v_prior.status='stopped' AND v_has_reserved_observation THEN
+      RAISE EXCEPTION 'Stopped pass contains an unexpected reserved discovery call'
         USING ERRCODE = '55000';
+    END IF;
+    IF v_has_reserved_observation THEN
+      -- A new session explicitly supersedes the old read reservation. The old
+      -- model session may still return, but the stopped-pass check in
+      -- complete_discovery_call fences that late result before Evidence/Work writes.
+      -- Reads are side-effect-free, so the new pass retries from the pre-read cursor.
+      UPDATE aep.discovery_passes SET
+        status='stopped',stop_reason='session_yield',stopped_at=clock_timestamp(),
+        resume_cursor=current_cursor,
+        tokens_used=tokens_used+tokens_reserved,tokens_reserved=0,
+        cost_used_micros=cost_used_micros+cost_reserved_micros,
+        cost_reserved_micros=0,updated_at=clock_timestamp()
+      WHERE pass_id=v_prior.pass_id
+      RETURNING * INTO v_prior;
+      INSERT INTO aep.discovery_pass_events(
+        pass_id,project_id,resource_id,session_id,event_type,event_payload
+      ) VALUES (
+        v_prior.pass_id,p_project_id,p_resource_id,p_session_id,'pass_yielded',
+        jsonb_build_object(
+          'reason','superseded_inflight_read',
+          'old_session_id',v_reserved_observation.pass_id,
+          'observation_id',v_reserved_observation.observation_id,
+          'late_result_disposition','ignored',
+          'resume_cursor',v_prior.resume_cursor
+        )
+      );
+      v_cursor := v_prior.resume_cursor;
+      v_source_list := v_prior.source_list;
+      v_watermark := v_prior.watermark;
     END IF;
     IF p_source_list IS NOT NULL AND p_source_list IS DISTINCT FROM v_prior.source_list THEN
       RAISE EXCEPTION 'A resumed pass must preserve its authorized source list'
@@ -400,8 +445,8 @@ BEGIN
     v_max_depth,v_max_fanout,v_max_tool_calls,v_max_elapsed_ms,v_max_tokens,
     v_max_cost_micros,v_max_no_progress,p_resume_from_pass_id,
     CASE WHEN v_prior.pass_id IS NULL THEN 0 ELSE v_prior.tool_calls_used END,
-    CASE WHEN v_prior.pass_id IS NULL THEN 0 ELSE v_prior.tokens_used END,
-    CASE WHEN v_prior.pass_id IS NULL THEN 0 ELSE v_prior.cost_used_micros END,
+    CASE WHEN v_prior.pass_id IS NULL THEN 0 ELSE v_prior.tokens_used+v_prior.tokens_reserved END,
+    CASE WHEN v_prior.pass_id IS NULL THEN 0 ELSE v_prior.cost_used_micros+v_prior.cost_reserved_micros END,
     CASE WHEN v_prior.pass_id IS NULL THEN 0 ELSE v_prior.no_progress_count END
   )
   ON CONFLICT(project_id,resource_id,request_key) DO NOTHING;
@@ -790,22 +835,28 @@ BEGIN
       USING ERRCODE = '22023';
   END IF;
 
-  IF v_action='approval_required' THEN
-    v_decision := 'approval_required';
-    v_reason := COALESCE(NULLIF(p_candidate->>'reason',''),'owner_decision_required');
-  ELSIF v_action='accept' THEN
+  IF v_action IN ('accept','approval_required') THEN
     v_candidate_key := NULLIF(btrim(p_candidate->>'candidate_key'),'');
-    v_candidate_title := NULLIF(btrim(p_candidate->>'title'),'');
-    v_candidate_work_type := p_candidate->>'work_type';
-    IF v_candidate_key IS NULL OR length(v_candidate_key)>500
-       OR v_candidate_title IS NULL OR length(v_candidate_title)>500
-       OR v_candidate_work_type IS NULL OR v_candidate_work_type NOT IN ('initiative','discovery','implementation','review','fix') THEN
-      RAISE EXCEPTION 'Accepted candidate requires stable candidate_key, title and valid work_type'
+    IF v_candidate_key IS NULL OR length(v_candidate_key)>500 THEN
+      RAISE EXCEPTION 'Accepted/approval-required candidate requires a stable candidate_key'
         USING ERRCODE = '22023';
     END IF;
     v_candidate_fingerprint := encode(public.digest(convert_to(
       p_project_id::text || '|discovery_candidate_v1|' || v_candidate_key,
       'UTF8'),'sha256'),'hex');
+  END IF;
+
+  IF v_action='approval_required' THEN
+    v_decision := 'approval_required';
+    v_reason := COALESCE(NULLIF(p_candidate->>'reason',''),'owner_decision_required');
+  ELSIF v_action='accept' THEN
+    v_candidate_title := NULLIF(btrim(p_candidate->>'title'),'');
+    v_candidate_work_type := p_candidate->>'work_type';
+    IF v_candidate_title IS NULL OR length(v_candidate_title)>500
+       OR v_candidate_work_type IS NULL OR v_candidate_work_type NOT IN ('initiative','discovery','implementation','review','fix') THEN
+      RAISE EXCEPTION 'Accepted candidate requires title and valid work_type'
+        USING ERRCODE = '22023';
+    END IF;
 
     SELECT * INTO v_project_resource FROM aep.project_resources
     WHERE project_id=p_project_id AND resource_id=p_resource_id AND status='active';
