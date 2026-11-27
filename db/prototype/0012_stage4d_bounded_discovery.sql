@@ -210,6 +210,7 @@ DECLARE
   v_root text;
   v_prefix text;
   v_kind text;
+  v_source record;
   v_max_depth integer;
   v_max_fanout integer;
   v_max_tool_calls integer;
@@ -330,10 +331,13 @@ BEGIN
        OR p_watermark IS NULL OR jsonb_typeof(p_watermark) IS DISTINCT FROM 'object' THEN
       RAISE EXCEPTION 'Cursor and watermark must be JSON objects' USING ERRCODE = '22023';
     END IF;
-    FOR v_kind,v_prefix IN
-      SELECT item.value->>'source_kind', item.value->>'source_prefix'
+    FOR v_source IN
+      SELECT item.value->>'source_kind' AS source_kind,
+             item.value->>'source_prefix' AS source_prefix
       FROM jsonb_array_elements(p_source_list) AS item(value)
     LOOP
+      v_kind := v_source.source_kind;
+      v_prefix := v_source.source_prefix;
       IF v_kind IS NULL OR length(btrim(v_kind)) NOT BETWEEN 1 AND 80
          OR v_prefix IS NULL OR length(btrim(v_prefix)) NOT BETWEEN length(v_root) AND 2000
          OR left(v_prefix,length(v_root)) <> v_root
@@ -809,7 +813,7 @@ BEGIN
         INTO v_work_id,v_register_outcome
         FROM aep.register_work(
           p_project_id,
-          'discovery:' || p_pass_id::text || ':' || p_call_key,
+          'discovery:' || encode(public.digest(convert_to(p_pass_id::text || '|' || p_call_key,'UTF8'),'sha256'),'hex'),
           p_session_id,
           'discovery_candidate_v1',
           v_candidate_fingerprint,
