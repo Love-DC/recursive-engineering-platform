@@ -306,6 +306,17 @@ def test_concurrent_canonical_registration(project_id: str, resource_id: str, st
     )
     if evidence_count != "2":
         raise AssertionError(f"Concurrent two-source scan should persist two observations, got {evidence_count}")
+    timestamp_alignment = scalar(
+        "SELECT count(*) FROM aep.discovery_observations o "
+        "JOIN aep.evidence e ON e.evidence_id=o.evidence_id "
+        "WHERE o.project_id="
+        f"{lit(project_id)}::uuid AND o.status='completed' "
+        "AND o.observed_at IS NOT NULL AND o.observed_at=e.observed_at;"
+    )
+    if timestamp_alignment != "2":
+        raise AssertionError(
+            f"Each immutable observation must align with its Evidence observed_at; got {timestamp_alignment}"
+        )
     external = scalar(
         "SELECT (SELECT count(*) FROM aep.external_refs)::text || ':' || "
         "(SELECT count(*) FROM aep.operation_receipts)::text;"
@@ -317,7 +328,12 @@ def test_concurrent_canonical_registration(project_id: str, resource_id: str, st
 def test_budgets_and_resume(project_id: str, resource_id: str, stable_id: str) -> None:
     # Tool-call cap stops before a second provider read and resumes from the stored cursor.
     session = str(uuid4())
-    p = start_pass(project_id,resource_id,stable_id,session_id=session,budget=limits(max_tool_calls=1))
+    p = start_pass(project_id,resource_id,stable_id,session_id=session,
+                   request_key="idempotent-start",budget=limits(max_tool_calls=1))
+    replayed_start = start_pass(project_id,resource_id,stable_id,session_id=session,
+                                request_key="idempotent-start",budget=limits(max_tool_calls=1))
+    if replayed_start.get("pass_id") != p.get("pass_id") or replayed_start.get("idempotent_replay") is not True:
+        raise AssertionError(f"Same-session start did not replay idempotently: {replayed_start}")
     call,done,_ = record_call(project_id,resource_id,stable_id,p["pass_id"],session,
         key="one-call",cursor_before={"page":1},cursor_after={"page":2},
         candidate={"action":"skip","reason":"non_actionable"})
