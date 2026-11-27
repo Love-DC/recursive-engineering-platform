@@ -85,3 +85,8 @@ Migration `0010_stage4b_context_compiler.sql` adds a logical compiler API withou
 ### Stage 4B prototype limitations
 
 This is not a production authorization system. The ProjectResource row is a trusted-single-Owner scope gate; neither `session_id` nor the caller-supplied `project_id` authenticates a principal. The repository observation (commit/tree/content hash plus adapter provenance) is supplied by the calling GitHub session adapter; PostgreSQL does not independently authenticate the adapter or fetch GitHub content. Cross-project Context grants, production Supabase deployment/RLS review, native identity binding, a network retrieval adapter and model-specific tokenization remain outside this prototype. Do not deploy these functions as a production API.
+
+
+### Stage 4B candidate verification
+
+Exact PR HEAD `11136edb42fea4cbc4f431845f211e6038ecd29a` passed GitHub Actions [Run #45918619591](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45918619591): Repository contract job `140243707885` and PostgreSQL 17.12 integration job `140243707465` both succeeded. Independent review is pending. This evidence applies only to the disposable prototype, not a production deployment or authenticated production identity boundary.
