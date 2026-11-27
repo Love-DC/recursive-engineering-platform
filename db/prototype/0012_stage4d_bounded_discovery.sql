@@ -837,15 +837,19 @@ BEGIN
       USING ERRCODE = '22023';
   END IF;
 
-  IF v_action IN ('accept','approval_required') THEN
+  IF p_candidate IS NOT NULL THEN
     v_candidate_key := NULLIF(btrim(p_candidate->>'candidate_key'),'');
-    IF v_candidate_key IS NULL OR length(v_candidate_key)>500 THEN
+    IF v_candidate_key IS NOT NULL THEN
+      IF length(v_candidate_key)>500 THEN
+        RAISE EXCEPTION 'Candidate key exceeds 500 characters' USING ERRCODE = '22023';
+      END IF;
+      v_candidate_fingerprint := encode(public.digest(convert_to(
+        p_project_id::text || '|discovery_candidate_v1|' || v_candidate_key,
+        'UTF8'),'sha256'),'hex');
+    ELSIF v_action IN ('accept','approval_required') THEN
       RAISE EXCEPTION 'Accepted/approval-required candidate requires a stable candidate_key'
         USING ERRCODE = '22023';
     END IF;
-    v_candidate_fingerprint := encode(public.digest(convert_to(
-      p_project_id::text || '|discovery_candidate_v1|' || v_candidate_key,
-      'UTF8'),'sha256'),'hex');
   END IF;
 
   IF v_action='approval_required' THEN
