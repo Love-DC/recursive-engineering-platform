@@ -113,14 +113,23 @@ def setup_fixture() -> tuple[str, str, str, str, str, str, str]:
         "VALUES('stage4b-' || substr(gen_random_uuid()::text,1,8),"
         "'Stage 4B Context Compiler fixture') RETURNING project_id;"
     )
-    resource_id = str(uuid4())
     repository_id = "1471589776"
-    psql(
-        "INSERT INTO aep.resources(resource_id,provider,host,resource_type,"
-        "stable_resource_id,canonical_key,display_name) VALUES("
-        f"{lit(resource_id)}::uuid,'github','github.com','repository',"
-        f"{lit(repository_id)},{lit('repository:'+repository_id)},'Stage 4B test repository');"
+    # Physical Resource identity is global and shared between projects. Reuse
+    # the same repository in the second fixture, then create a separate
+    # ProjectResource grant for that project.
+    resource_id = scalar(
+        "SELECT resource_id::text FROM aep.resources "
+        "WHERE provider='github' AND host='github.com' "
+        f"AND resource_type='repository' AND stable_resource_id={lit(repository_id)} LIMIT 1;"
     )
+    if not resource_id:
+        resource_id = str(uuid4())
+        psql(
+            "INSERT INTO aep.resources(resource_id,provider,host,resource_type,"
+            "stable_resource_id,canonical_key,display_name) VALUES("
+            f"{lit(resource_id)}::uuid,'github','github.com','repository',"
+            f"{lit(repository_id)},{lit('repository:'+repository_id)},'Stage 4B test repository');"
+        )
     grant_decision_id = scalar(
         "INSERT INTO aep.owner_decisions("
         "scope_type,scope_key,decision_key,statement,decision_version,status,"
