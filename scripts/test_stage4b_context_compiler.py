@@ -552,7 +552,7 @@ def test_dependency_batch_lock_order(project_ids: list[str]) -> None:
     barrier_key = int(uuid4().hex[:15],16)
     controller = _start_psql(
         "stage4b_dependency_batch_barrier",
-        f"SELECT pg_advisory_lock({barrier_key}::bigint);\n"
+        f"DO $ctx$ BEGIN PERFORM pg_advisory_lock({barrier_key}::bigint); END $ctx$;\n"
         "SELECT 'dependency_batch_barrier_ready';\n",
         keep_stdin_open=True,
     )
