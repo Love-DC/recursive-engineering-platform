@@ -409,6 +409,37 @@ def test_budgets_and_resume(project_id: str, resource_id: str, stable_id: str) -
     if no_progress_again.get("stop_reason")!="no_progress" or no_progress_again.get("no_progress_count") != 2:
         raise AssertionError(f"Repeated no-progress across sessions did not stop: {no_progress_again}")
 
+    # Repeated exact child fingerprints link to the canonical Work, then stop
+    # when no new eligible Work is created.
+    duplicate_session = str(uuid4())
+    duplicate_pass = start_pass(project_id,resource_id,stable_id,
+        session_id=duplicate_session,budget=limits(max_no_progress=1))
+    repeated = candidate("child:repeat-this-fingerprint","Repeated child candidate")
+    _,first_candidate,_ = record_call(
+        project_id,resource_id,stable_id,duplicate_pass["pass_id"],duplicate_session,
+        key="repeat-first",cursor_before={"page":1},cursor_after={"page":2},
+        candidate=repeated
+    )
+    if first_candidate.get("decision")!="accepted":
+        raise AssertionError(f"First child fingerprint should create the canonical Work: {first_candidate}")
+    _,repeated_candidate,_ = record_call(
+        project_id,resource_id,stable_id,duplicate_pass["pass_id"],duplicate_session,
+        key="repeat-second",cursor_before={"page":2},cursor_after={"page":3},
+        candidate=repeated
+    )
+    if (repeated_candidate.get("decision")!="linked"
+            or repeated_candidate.get("stop_reason")!="no_progress"
+            or repeated_candidate.get("candidate_fingerprint")!=first_candidate.get("candidate_fingerprint")):
+        raise AssertionError(f"Repeated child fingerprint must link and stop for no progress: {repeated_candidate}")
+    repeated_work_count = scalar(
+        "SELECT count(*) FROM aep.works WHERE project_id="
+        f"{lit(project_id)}::uuid AND identity_kind='discovery_candidate_v1' "
+        f"AND identity_key={lit(first_candidate['candidate_fingerprint'])};"
+    )
+    if repeated_work_count!="1":
+        raise AssertionError(f"Repeated child fingerprint created {repeated_work_count} canonical Work rows")
+
+
 
 def test_interrupted_reservation_recovery(
     project_id: str, resource_id: str, stable_id: str
