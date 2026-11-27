@@ -389,12 +389,13 @@ def test_budgets_and_resume(project_id: str, resource_id: str, stable_id: str) -
         candidate={"action":"skip","reason":"duplicate_or_not_actionable"})
     if no_progress.get("stop_reason")!="no_progress" or no_progress.get("resume_cursor")!={"page":2}:
         raise AssertionError(f"No-progress guard did not persist a resumable cursor: {no_progress}")
-    resumed_no_progress = start_pass(project_id,resource_id,stable_id,session_id=str(uuid4()),
+    resumed_session = str(uuid4())
+    resumed_no_progress = start_pass(project_id,resource_id,stable_id,session_id=resumed_session,
         budget=limits(max_no_progress=2),resume_from=p5["pass_id"])
     if resumed_no_progress.get("no_progress_count") != 1:
         raise AssertionError(f"Resume reset the cumulative no-progress count: {resumed_no_progress}")
     _,no_progress_again,_ = record_call(project_id,resource_id,stable_id,
-        resumed_no_progress["pass_id"],resumed_no_progress["session_id"] if "session_id" in resumed_no_progress else str(uuid4()),
+        resumed_no_progress["pass_id"],resumed_session,
         key="no-progress-again",cursor_before={"page":2},cursor_after={"page":3},
         candidate={"action":"skip","reason":"same_candidate_no_progress"})
     if no_progress_again.get("stop_reason")!="no_progress" or no_progress_again.get("no_progress_count") != 2:
