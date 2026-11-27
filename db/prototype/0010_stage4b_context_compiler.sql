@@ -676,6 +676,9 @@ BEGIN
       count(*) FILTER (
         WHERE size_row.payload_bytes > 16384
            OR size_row.provenance_bytes > 8192
+           OR size_row.evidence_type_bytes > 400
+           OR size_row.source_ref_bytes > 8192
+           OR size_row.source_revision_bytes > 8192
       )::bigint AS oversized_count
     FROM aep.context_evidence_sizes AS size_row
     WHERE size_row.project_id = p_project_id
@@ -689,19 +692,28 @@ BEGIN
       size_row.evidence_type,
       size_row.observed_at,
       size_row.payload_bytes,
-      size_row.provenance_bytes
+      size_row.provenance_bytes,
+      size_row.evidence_type_bytes,
+      size_row.source_ref_bytes,
+      size_row.source_revision_bytes
     FROM aep.context_evidence_sizes AS size_row
     WHERE size_row.project_id = p_project_id
       AND size_row.work_id = ANY(v_related_work_ids)
       AND size_row.evidence_type <> 'repository_revision'
       AND size_row.payload_bytes <= 16384
       AND size_row.provenance_bytes <= 8192
+      AND size_row.evidence_type_bytes <= 400
+      AND size_row.source_ref_bytes <= 8192
+      AND size_row.source_revision_bytes <= 8192
     ORDER BY size_row.observed_at DESC, size_row.evidence_id DESC
     LIMIT 128
   ),
   bounded_metadata AS MATERIALIZED (
     SELECT candidate_metadata.*,
-      sum(payload_bytes + provenance_bytes) OVER (
+      sum(
+        payload_bytes + provenance_bytes + evidence_type_bytes
+        + source_ref_bytes + source_revision_bytes + 512
+      ) OVER (
         ORDER BY observed_at DESC, evidence_id DESC
       ) AS cumulative_materialized_bytes
     FROM candidate_metadata
@@ -723,6 +735,14 @@ BEGIN
         'source_ref', evidence_row.source_ref,
         'source_revision', evidence_row.source_revision,
         'content_sha256', evidence_row.content_sha256,
+        'evidence_type_bytes', selected.evidence_type_bytes,
+        'source_ref_bytes', selected.source_ref_bytes,
+        'source_revision_bytes', selected.source_revision_bytes,
+        'materialized_bytes', (
+          selected.payload_bytes + selected.provenance_bytes
+          + selected.evidence_type_bytes + selected.source_ref_bytes
+          + selected.source_revision_bytes + 512
+        ),
         'payload_sha256', encode(
           public.digest(convert_to(evidence_row.payload::text, 'UTF8'), 'sha256'), 'hex'
         ),
@@ -735,8 +755,11 @@ BEGIN
       ) ORDER BY evidence_row.observed_at DESC, evidence_row.evidence_id DESC), '[]'::jsonb)
         AS evidence_payload,
       count(*)::bigint AS selected_count,
-      COALESCE(sum(selected.payload_bytes + selected.provenance_bytes),0)::bigint
-        AS selected_materialized_bytes
+      COALESCE(sum(
+        selected.payload_bytes + selected.provenance_bytes
+        + selected.evidence_type_bytes + selected.source_ref_bytes
+        + selected.source_revision_bytes + 512
+      ),0)::bigint AS selected_materialized_bytes
     FROM selected_metadata AS selected
     JOIN aep.evidence AS evidence_row
       ON evidence_row.evidence_id = selected.evidence_id
@@ -752,6 +775,10 @@ BEGIN
       'selected_materialized_bytes', selected_evidence.selected_materialized_bytes,
       'max_payload_bytes_per_item', 16384,
       'max_provenance_bytes_per_item', 8192,
+      'max_evidence_type_bytes_per_item', 400,
+      'max_source_ref_bytes_per_item', 8192,
+      'max_source_revision_bytes_per_item', 8192,
+      'per_item_fixed_overhead_bytes', 512,
       'max_candidate_count', 128,
       'max_selected_materialized_bytes', 262144
     )
