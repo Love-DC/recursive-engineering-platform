@@ -719,8 +719,8 @@ def main() -> None:
     test_budgets_and_resume(project_id,resource_id,stable_id)
     test_interrupted_reservation_recovery(project_id,resource_id,stable_id)
     test_depth_and_fanout(project_id,resource_id,stable_id)
-    test_read_only_owner_gate_and_queue(project_id,resource_id,stable_id)
     test_possible_duplicate_is_nonblocking(project_id,resource_id,stable_id)
+    test_read_only_owner_gate_and_queue(project_id,resource_id,stable_id)
     test_revocation_before_payload_read()
     print(
         "PASS T19: empty-queue discovery, reproducible Evidence, concurrent canonical "
