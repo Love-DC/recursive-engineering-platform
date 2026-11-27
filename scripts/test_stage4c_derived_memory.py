@@ -47,8 +47,11 @@ def json_result(sql: str) -> dict:
 def setup_database() -> None:
     paths = sorted((ROOT / "db" / "prototype").glob("*.sql"))
     versions = [int(path.name[:4]) for path in paths]
-    if versions != list(range(1, 12)):
-        raise AssertionError(f"Expected clean ordered migrations 0001..0011, got {versions}")
+    expected_versions = list(range(1, max(versions, default=0) + 1))
+    if versions != expected_versions or 11 not in versions:
+        raise AssertionError(
+            f"Expected an ordered migration chain containing 0001..0011, got {versions}"
+        )
 
     psql(f"DROP DATABASE IF EXISTS {DATABASE} WITH (FORCE);", db="postgres")
     psql(f"CREATE DATABASE {DATABASE};", db="postgres")
@@ -57,7 +60,7 @@ def setup_database() -> None:
         raise AssertionError(f"Stage 4C requires PostgreSQL 17.12; got {version}")
     for path in paths:
         psql(file=path)
-    print("PASS T26: clean migrations 0001..0011 on PostgreSQL 17.12")
+    print(f"PASS T26: clean migrations 0001..{versions[-1]:04d} on PostgreSQL 17.12")
 
 
 def insert_source_evidence(
