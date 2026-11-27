@@ -381,7 +381,7 @@ BEGIN
       'status',v_existing.status,'pass_id',v_existing.pass_id,
       'resume_cursor',v_existing.resume_cursor,'tool_calls_used',v_existing.tool_calls_used,
       'tokens_used',v_existing.tokens_used,'cost_used_micros',v_existing.cost_used_micros,
-      'idempotent_replay',true
+      'no_progress_count',v_existing.no_progress_count,'idempotent_replay',true
     );
   END IF;
 
@@ -429,7 +429,7 @@ BEGIN
     'status',v_existing.status,'pass_id',v_existing.pass_id,
     'resume_cursor',v_existing.resume_cursor,'tool_calls_used',v_existing.tool_calls_used,
     'tokens_used',v_existing.tokens_used,'cost_used_micros',v_existing.cost_used_micros,
-    'idempotent_replay',v_row_count=0
+    'no_progress_count',v_existing.no_progress_count,'idempotent_replay',v_row_count=0
   );
 END
 $function$;
