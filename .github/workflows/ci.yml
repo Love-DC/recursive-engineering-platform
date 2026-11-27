@@ -89,3 +89,5 @@ jobs:
         run: python scripts/test_stage3_delivery_protocol.py
       - name: Run Stage 4A fresh-session recovery tests
         run: python scripts/test_stage4_recovery.py
+      - name: Run Stage 4B authorized Context Compiler and Context Pack tests
+        run: python scripts/test_stage4b_context_compiler.py
