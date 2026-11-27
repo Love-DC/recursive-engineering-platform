@@ -31,7 +31,7 @@ CREATE TABLE aep.discovery_passes (
   status text NOT NULL DEFAULT 'running' CHECK (status IN ('running','stopped','completed')),
   stop_reason text CHECK (stop_reason IS NULL OR stop_reason IN (
     'tool_call_budget','token_budget','cost_budget','elapsed_budget',
-    'depth_budget','fanout_budget','no_progress','session_yield'
+    'depth_budget','fanout_budget','no_progress','session_yield','queue_ready'
   )),
   started_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   stopped_at timestamptz,
@@ -50,6 +50,8 @@ CREATE TABLE aep.discovery_passes (
 
 CREATE INDEX discovery_passes_scope_status_idx
   ON aep.discovery_passes(project_id, resource_id, status, started_at DESC);
+CREATE UNIQUE INDEX discovery_one_running_pass_per_scope_uq
+  ON aep.discovery_passes(project_id,resource_id) WHERE status='running';
 
 CREATE TABLE aep.discovery_observations (
   observation_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -98,8 +100,11 @@ CREATE TABLE aep.discovery_observations (
     (status = 'completed' AND completed_at IS NOT NULL AND result_sha256 IS NOT NULL
       AND evidence_id IS NOT NULL AND decision IS NOT NULL)
   ),
-  CHECK ((parent_work_id IS NULL AND parent_observation_id IS NULL AND depth = 0)
-      OR (parent_work_id IS NOT NULL AND parent_observation_id IS NOT NULL AND depth > 0))
+  CHECK (
+    (status='reserved' AND parent_work_id IS NULL AND parent_observation_id IS NULL AND depth IS NULL)
+    OR (status='completed' AND parent_work_id IS NULL AND parent_observation_id IS NULL AND depth=0)
+    OR (status='completed' AND parent_work_id IS NOT NULL AND parent_observation_id IS NOT NULL AND depth>0)
+  )
 );
 
 CREATE UNIQUE INDEX discovery_observations_one_reserved_per_pass_uq
@@ -281,6 +286,10 @@ BEGIN
   IF NOT FOUND OR v_kind <> 'active' THEN
     RAISE EXCEPTION 'Discovery requires an active project' USING ERRCODE = '42501';
   END IF;
+  IF EXISTS (SELECT 1 FROM aep.works WHERE project_id=p_project_id AND status='ready') THEN
+    RETURN jsonb_build_object('status','queue_not_empty','ready_work_count',
+      (SELECT count(*) FROM aep.works WHERE project_id=p_project_id AND status='ready'));
+  END IF;
   SELECT * INTO v_resource FROM aep.resources
   WHERE resource_id=p_resource_id AND provider='github'
     AND resource_type='repository' AND status='active';
@@ -438,7 +447,7 @@ BEGIN
   SELECT * INTO v_pass FROM aep.discovery_passes
   WHERE pass_id=p_pass_id AND project_id=p_project_id AND resource_id=p_resource_id
   FOR UPDATE;
-  IF NOT FOUND OR v_pass.session_id<>p_session_id OR v_pass.status<>'running' THEN
+  IF NOT FOUND OR v_pass.session_id<>p_session_id THEN
     RETURN jsonb_build_object('status','stopped','reason','pass_unavailable');
   END IF;
 
@@ -462,6 +471,9 @@ BEGIN
     );
   END IF;
 
+  IF v_pass.status<>'running' THEN
+    RETURN jsonb_build_object('status','stopped','reason','pass_unavailable');
+  END IF;
   IF p_cursor_before IS DISTINCT FROM v_pass.current_cursor THEN
     RAISE EXCEPTION 'Discovery cursor is stale; resume from the persisted current cursor'
       USING ERRCODE = '40001';
@@ -492,6 +504,16 @@ BEGIN
   IF NOT v_allowed THEN
     RAISE EXCEPTION 'Discovery source is outside the declared authorized source list'
       USING ERRCODE = '42501';
+  END IF;
+  IF EXISTS (SELECT 1 FROM aep.works WHERE project_id=p_project_id AND status='ready') THEN
+    UPDATE aep.discovery_passes SET status='stopped',stop_reason='queue_ready',
+      stopped_at=clock_timestamp(),resume_cursor=current_cursor,updated_at=clock_timestamp()
+    WHERE pass_id=p_pass_id;
+    INSERT INTO aep.discovery_pass_events(pass_id,project_id,resource_id,session_id,event_type,event_payload)
+    VALUES(p_pass_id,p_project_id,p_resource_id,p_session_id,'budget_stopped',
+      jsonb_build_object('reason','queue_ready','resume_cursor',v_pass.current_cursor));
+    RETURN jsonb_build_object('status','stopped','reason','queue_not_empty',
+      'resume_cursor',v_pass.current_cursor);
   END IF;
 
   v_elapsed := floor(extract(epoch FROM (clock_timestamp()-v_pass.started_at))*1000)::bigint;
@@ -646,7 +668,7 @@ BEGIN
   SELECT * INTO v_pass FROM aep.discovery_passes
   WHERE pass_id=p_pass_id AND project_id=p_project_id AND resource_id=p_resource_id
   FOR UPDATE;
-  IF NOT FOUND OR v_pass.session_id<>p_session_id OR v_pass.status<>'running' THEN
+  IF NOT FOUND OR v_pass.session_id<>p_session_id THEN
     RETURN jsonb_build_object('status','stopped','reason','pass_unavailable');
   END IF;
   SELECT * INTO v_observation FROM aep.discovery_observations
@@ -669,6 +691,9 @@ BEGIN
         USING ERRCODE = '22000';
     END IF;
     RETURN v_observation.result_payload || jsonb_build_object('idempotent_replay',true);
+  END IF;
+  IF v_pass.status<>'running' THEN
+    RETURN jsonb_build_object('status','stopped','reason','pass_unavailable');
   END IF;
   IF p_source_revision IS NOT NULL AND length(p_source_revision)>1000 THEN
     RAISE EXCEPTION 'Source revision exceeds 1000 characters' USING ERRCODE = '22023';
@@ -697,6 +722,10 @@ BEGIN
   v_action := COALESCE(p_candidate->>'action','skip');
   v_decision := 'skipped';
   v_reason := COALESCE(NULLIF(p_candidate->>'reason',''),'no_candidate');
+  IF EXISTS (SELECT 1 FROM aep.works WHERE project_id=p_project_id AND status='ready') THEN
+    v_action := 'skip';
+    v_reason := 'queue_ready';
+  END IF;
   v_acceptance := COALESCE(p_candidate->'acceptance','{}'::jsonb);
   IF jsonb_typeof(v_acceptance) IS DISTINCT FROM 'object' THEN
     RAISE EXCEPTION 'Candidate acceptance must be a JSON object' USING ERRCODE = '22023';
@@ -716,7 +745,7 @@ BEGIN
     v_candidate_work_type := p_candidate->>'work_type';
     IF v_candidate_key IS NULL OR length(v_candidate_key)>500
        OR v_candidate_title IS NULL OR length(v_candidate_title)>500
-       OR v_candidate_work_type NOT IN ('initiative','discovery','implementation','review','fix') THEN
+       OR v_candidate_work_type IS NULL OR v_candidate_work_type NOT IN ('initiative','discovery','implementation','review','fix') THEN
       RAISE EXCEPTION 'Accepted candidate requires stable candidate_key, title and valid work_type'
         USING ERRCODE = '22023';
     END IF;
@@ -828,8 +857,10 @@ BEGIN
   v_resume_cursor := CASE WHEN v_decision='pending'
     THEN v_observation.cursor_before ELSE p_resume_cursor END;
 
-  IF v_decision='pending' THEN
-    v_stop_reason := v_reason;
+  IF v_reason='queue_ready' THEN
+    v_stop_reason := 'queue_ready';
+  ELSIF v_decision='pending' THEN
+    v_stop_reason := CASE WHEN v_reason='max_depth' THEN 'depth_budget' ELSE 'fanout_budget' END;
   ELSIF v_tokens_used+v_tokens_reserved>v_pass.max_tokens THEN
     v_stop_reason := 'token_budget';
   ELSIF v_cost_used+v_cost_reserved>v_pass.max_cost_micros THEN
