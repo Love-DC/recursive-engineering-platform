@@ -260,7 +260,7 @@ def test_concurrent_canonical_registration(project_id: str, resource_id: str, st
             "SELECT aep.reserve_discovery_call("
             f"{lit(project_id)}::uuid,{lit(resource_id)}::uuid,{lit(pass_value['pass_id'])}::uuid,"
             f"{lit(session)}::uuid,{lit(key)},'github_fetch_issue','issue',"
-            f"{lit(source)},'{{"page":1}}'::jsonb,100,100);"
+            f"{lit(source)},{json_sql({'page':1})},100,100);"
         )
         assert_status(result,"reserved","concurrent scan reservation")
 
