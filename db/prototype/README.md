@@ -1,6 +1,6 @@
-# Work Registry, coordination model, and Stage 2A–Stage 4C protocol prototypes
+# Work Registry, coordination model, and Stage 2A–Stage 4D protocol prototypes
 
-This directory contains disposable PostgreSQL experiments for the Stage 1A/1B data model and the Stage 2A, Stage 2B, Stage 3, Stage 4A recovery, and Stage 4B Context Compiler/Context Pack protocol prototypes.
+This directory contains disposable PostgreSQL experiments for the Stage 1A/1B data model and the Stage 2A, Stage 2B, Stage 3, Stage 4A recovery, Stage 4B Context Compiler/Context Packs, Stage 4C evidence-derived memory, and Stage 4D bounded discovery protocols.
 
 ## Implemented
 
@@ -108,3 +108,21 @@ Migration `0011_stage4c_derived_memory.sql` adds a disposable, project/work/reso
 - The MVP extractor is a deterministic bounded SQL projection. PostgreSQL built-in full-text search is used; the model-version field records the declared extraction environment but no LLM model is invoked. No vector database, graph database or standalone memory service is added.
 
 `scripts/test_stage4c_derived_memory.py` applies a separate clean 0001–0011 chain and tests idempotency/deterministic hash equality, version changes, exact Evidence provenance, immutability, automatic invalidation, project isolation, FTS and fresh Context Pack consumption. The complete Stage 4C suite and existing regressions passed exact-head [Run #199](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45956571676) on candidate `4fcb5bc5feea0142fb4a4b5bf28bc99a1bc34b76`. Independent review returned PASS ([record](https://github.com/Love-DC/recursive-engineering-platform/pull/81#pullrequestreview-6084735569)). PR #81 was squash-merged at `a303618092ba0c762c8f850603b9c57328b00035`; exact-merge [Run #200](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45958199427) passed on that SHA. This closes T25 for the disposable PostgreSQL 17.12 prototype only. This is disposable PostgreSQL 17.12 prototype work only; it is not a production Supabase migration or deployment.
+
+
+## Stage 4D — bounded empty-queue discovery and decomposition (merged prototype)
+
+Implementation: [PR #84](https://github.com/Love-DC/recursive-engineering-platform/pull/84), tracked by [Issue #62](https://github.com/Love-DC/recursive-engineering-platform/issues/62).
+
+Migration `0012_stage4d_bounded_discovery.sql` adds an A0 active-session protocol:
+- `start_discovery_pass` checks the active project, authorized GitHub repository Resource and empty ready queue before it creates a pass; it persists the source list, cursor/watermark, budget ceilings, session provenance and resumable state.
+- `reserve_discovery_call` validates the source against the pass's authorized repository prefixes and reserves a single read-only tool call plus token/cost estimates before the active session invokes the provider.
+- `complete_discovery_call` commits the immutable source Evidence, observation result, candidate disposition and any canonical Work registration atomically. It reuses `aep.register_work`; there is no second Work Registry. Stable fingerprints support accepted/linked/skipped/approval-required records. `possible_duplicate` is a typed relation only and never merges Work.
+- Depth, per-parent fan-out, tool-call, elapsed-time, token, cost and no-progress limits stop the pass with durable state and a resume cursor. Cumulative usage carries across sessions. A new session can take over an in-flight read; the previous pass is fenced, late results cannot create Evidence/Work, and the recovery request is idempotent.
+- `get_discovery_state` exposes bounded recovery metadata through the existing authorization gate. `finish_discovery_pass` marks a fully exhausted scan complete; `yield_discovery_pass` stores an explicit session-yield cursor. Direct runtime table access is revoked; the runtime receives only the scoped RPC EXECUTE grants.
+
+`scripts/test_stage4d_discovery.py` covers T19/T20: concurrent/repeated scans converge on one canonical Work, possible-duplicate relations preserve distinct Work, and all budget/recursion/no-progress limits stop and resume with durable cursors. It also checks read-only/Owner-retained approval-required behavior, revocation-before-retrieval, in-flight read takeover/late-result fencing, idempotent recovery, and absence of external provider writes.
+
+Exact candidate HEAD: `647c56da4e763e3174a977c7e24bef1ea066acc7`; exact-head [Run #45967867851](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45967867851) SUCCESS; coordinator review [PASS](https://github.com/Love-DC/recursive-engineering-platform/pull/84#pullrequestreview-6085558387); PR #84 squash-merged at `78f942d9c60fe28b20757aeb71644f350d0ec15a`; exact-merge [Run #45968284136](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45968284136) SUCCESS. T19/T20 are PASS for the disposable PostgreSQL 17.12 prototype only. The coordinator review used the same connected GitHub principal, not a separate authenticated reviewer.
+
+Boundary: ProjectResource remains a trusted-single-Owner prototype gate, `session_id` is provenance not authenticated identity, token/cost usage is caller-reported, and no scheduled/background LLM runtime, production deployment, or legacy RAE/Supabase change is included.
