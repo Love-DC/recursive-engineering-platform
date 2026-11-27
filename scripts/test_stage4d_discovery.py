@@ -631,6 +631,43 @@ def test_read_only_owner_gate_and_queue(project_id: str, resource_id: str, stabl
     assert_status(denied,"queue_not_empty","ready queue preflight")
 
 
+def test_possible_duplicate_is_nonblocking(
+    project_id: str, resource_id: str, stable_id: str
+) -> None:
+    anchor_id = scalar(
+        "SELECT work_id::text FROM aep.register_work("
+        f"{lit(project_id)}::uuid,{lit('possible-duplicate-anchor-'+uuid4().hex)},"
+        f"{lit(str(uuid4()))}::uuid,'stage4d_fixture','existing-distinct-work',1,"
+        "'implementation','Existing distinct Work','{}'::jsonb,NULL);"
+    )
+    session = str(uuid4())
+    pass_value = start_pass(project_id,resource_id,stable_id,session_id=session)
+    _,result,_ = record_call(
+        project_id,resource_id,stable_id,pass_value["pass_id"],session,
+        key="possible-duplicate-candidate",cursor_before={"page":1},cursor_after={"page":2},
+        candidate=candidate(
+            "distinct-work:related-not-identical","Related but distinct Work",
+            possible_duplicate_work_id=anchor_id
+        )
+    )
+    if result.get("decision")!="accepted" or result.get("work_id")==anchor_id:
+        raise AssertionError(f"Possible duplicate must not block canonical Work registration: {result}")
+    relation_count = scalar(
+        "SELECT count(*) FROM aep.work_relations "
+        f"WHERE relation_type='possible_duplicate' "
+        f"AND source_work_id=LEAST({lit(anchor_id)}::uuid,{lit(result['work_id'])}::uuid) "
+        f"AND target_work_id=GREATEST({lit(anchor_id)}::uuid,{lit(result['work_id'])}::uuid);"
+    )
+    if relation_count!="1":
+        raise AssertionError(f"Expected a non-merging possible_duplicate relation, got {relation_count}")
+    work_count = scalar(
+        "SELECT count(*) FROM aep.works WHERE project_id="
+        f"{lit(project_id)}::uuid AND work_id IN ({lit(anchor_id)}::uuid,{lit(result['work_id'])}::uuid);"
+    )
+    if work_count!="2":
+        raise AssertionError(f"Possible duplicate relation merged/lost a Work: {work_count}")
+
+
 def test_revocation_before_payload_read() -> None:
     project_id,resource_id,stable_id = setup_scope(access_mode="write")
     session = str(uuid4())
@@ -683,6 +720,7 @@ def main() -> None:
     test_interrupted_reservation_recovery(project_id,resource_id,stable_id)
     test_depth_and_fanout(project_id,resource_id,stable_id)
     test_read_only_owner_gate_and_queue(project_id,resource_id,stable_id)
+    test_possible_duplicate_is_nonblocking(project_id,resource_id,stable_id)
     test_revocation_before_payload_read()
     print(
         "PASS T19: empty-queue discovery, reproducible Evidence, concurrent canonical "
