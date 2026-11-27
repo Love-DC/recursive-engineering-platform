@@ -168,7 +168,7 @@ def test_authorization_locks(project_id: str, resource_id: str, grant_decision_i
 def test_authorization_lock_order(
     project_id: str, resource_id: str, grant_decision_id: str,
 ) -> None:
-    """Prove tuple-lock-first writers cannot deadlock Context authorization readers."""
+    """Prove resource→project readers cannot deadlock tuple-first resource writers."""
     cmd = [
         "psql", "-X", "-q", "-A", "-t", "-v", "ON_ERROR_STOP=1",
         "-h", HOST, "-p", PORT, "-U", USER, "-d", DATABASE,
@@ -184,8 +184,12 @@ def test_authorization_lock_order(
         assert reader.stdin is not None and reader.stdout is not None
         reader.stdin.write(
             "BEGIN;\n"
-            "DO $ctx$ BEGIN PERFORM pg_advisory_xact_lock_shared(hashtextextended("
-            f"'aep.context-project:' || {lit(project_id)}::text,0)); END $ctx$;\n"
+            "DO $ctx$ BEGIN "
+            "PERFORM pg_advisory_xact_lock_shared(hashtextextended("
+            f"'aep.context-resource:' || {lit(resource_id)}::text,0)); "
+            "PERFORM pg_advisory_xact_lock_shared(hashtextextended("
+            f"'aep.context-project:' || {lit(project_id)}::text,0)); "
+            "END $ctx$;\n"
             "SELECT 'reader_ready';\n"
         )
         reader.stdin.flush()
@@ -228,10 +232,10 @@ def test_authorization_lock_order(
                 writer.wait()
                 raise AssertionError(f"{label}: writer never reached the expected advisory-lock wait")
 
-            # The writer now owns its target tuple and is blocked in the row
-            # trigger waiting for the exclusive project advisory lock. Calling
-            # authorization here used to request FOR SHARE on that tuple and
-            # form the exact advisory/tuple lock cycle from the independent review.
+            # The writer now owns its target tuple and waits on the exclusive
+            # Resource lock. The reader already holds shared Resource then shared
+            # Project locks, matching the production Context gate. Authorization
+            # must use MVCC reads and never wait on the writer-held tuple.
             reader.stdin.write(
                 "SELECT aep.context_project_resource_allowed("
                 f"{lit(project_id)}::uuid,{lit(resource_id)}::uuid);\n"
