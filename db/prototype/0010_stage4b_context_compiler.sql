@@ -332,9 +332,12 @@ BEGIN
     );
   END IF;
 
-  -- Keep the project/resource grant stable for the whole calling transaction.
-  -- A concurrent revoke/archive/status change must wait until Context retrieval
-  -- has either completed or rolled back.
+  -- Do not take row-level locks in the authorization gate. A writer can
+  -- already hold its target tuple lock when its BEFORE ROW trigger requests the
+  -- exclusive project advisory lock. If this reader then tried FOR SHARE, the
+  -- reader and writer could deadlock (advisory -> tuple versus tuple -> advisory).
+  -- Plain MVCC reads are stable here: every relevant writer must acquire the
+  -- conflicting exclusive project lock before it can change/commit the row.
   SELECT project_row.status,project_resource.status,resource_row.status,
          project_resource.access_mode,project_resource.grant_decision_id
   INTO v_project_status,v_project_resource_status,v_resource_status,
@@ -345,8 +348,7 @@ BEGIN
   JOIN aep.resources AS resource_row
     ON resource_row.resource_id = project_resource.resource_id
   WHERE project_row.project_id = p_project_id
-    AND project_resource.resource_id = p_resource_id
-  FOR SHARE OF project_row,project_resource,resource_row;
+    AND project_resource.resource_id = p_resource_id;
 
   IF NOT FOUND
      OR v_project_status NOT IN ('active','paused')
@@ -364,13 +366,12 @@ BEGIN
     RETURN false;
   END IF;
 
-  -- Lock the exact decision as well: changing its approval/status/scope must
-  -- wait for the current authorized retrieval transaction to finish.
+  -- The project advisory lock also serializes mutations to this decision.
+  -- Keep this as an MVCC read (no tuple lock) to preserve the same lock order.
   SELECT decision_row.status,decision_row.scope_type,decision_row.scope_key
   INTO v_decision_status,v_decision_scope_type,v_decision_scope_key
   FROM aep.owner_decisions AS decision_row
-  WHERE decision_row.decision_id = v_decision_id
-  FOR SHARE;
+  WHERE decision_row.decision_id = v_decision_id;
 
   IF NOT FOUND OR v_decision_status <> 'approved' THEN
     RETURN false;
