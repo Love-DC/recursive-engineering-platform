@@ -183,10 +183,10 @@ def test_authorization_lock_order(
         )
         assert reader.stdin is not None and reader.stdout is not None
         reader.stdin.write(
-            "BEGIN;\\n"
-            "DO $ BEGIN PERFORM pg_advisory_xact_lock_shared(hashtextextended("
-            f"'aep.context-project:' || {lit(project_id)}::text,0)); END $;\\n"
-            "SELECT 'reader_ready';\\n"
+            "BEGIN;\n"
+            "DO $ctx$ BEGIN PERFORM pg_advisory_xact_lock_shared(hashtextextended("
+            f"'aep.context-project:' || {lit(project_id)}::text,0)); END $ctx$;\n"
+            "SELECT 'reader_ready';\n"
         )
         reader.stdin.flush()
         ready = reader.stdout.readline().strip()
@@ -234,8 +234,8 @@ def test_authorization_lock_order(
             # form the exact advisory/tuple lock cycle from the independent review.
             reader.stdin.write(
                 "SELECT aep.context_project_resource_allowed("
-                f"{lit(project_id)}::uuid,{lit(resource_id)}::uuid);\\n"
-                "COMMIT;\\n"
+                f"{lit(project_id)}::uuid,{lit(resource_id)}::uuid);\n"
+                "COMMIT;\n"
             )
             reader.stdin.flush()
             reader.stdin.close()
