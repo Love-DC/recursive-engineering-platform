@@ -2,6 +2,50 @@
 -- Prototype-only PostgreSQL. Never apply to production Supabase or legacy RAE.
 BEGIN;
 
+-- Store only bounded-size metadata beside the append-only Evidence Ledger.
+-- The Context Compiler can select eligible IDs without deserializing payload JSON.
+CREATE TABLE aep.context_evidence_sizes (
+  evidence_id uuid PRIMARY KEY REFERENCES aep.evidence(evidence_id),
+  project_id uuid NOT NULL REFERENCES aep.projects(project_id),
+  work_id uuid,
+  evidence_type text NOT NULL,
+  observed_at timestamptz NOT NULL,
+  payload_bytes bigint NOT NULL CHECK (payload_bytes >= 0),
+  provenance_bytes bigint NOT NULL CHECK (provenance_bytes >= 0)
+);
+
+INSERT INTO aep.context_evidence_sizes(
+  evidence_id,project_id,work_id,evidence_type,observed_at,payload_bytes,provenance_bytes
+)
+SELECT evidence_id,project_id,work_id,evidence_type,observed_at,
+       octet_length(payload::text),octet_length(provenance::text)
+FROM aep.evidence;
+
+CREATE INDEX evidence_context_snapshot_idx
+  ON aep.context_evidence_sizes(project_id, work_id, observed_at DESC, evidence_id)
+  INCLUDE (evidence_type, payload_bytes, provenance_bytes);
+
+CREATE FUNCTION aep.capture_context_evidence_sizes()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, aep
+AS $function$
+BEGIN
+  INSERT INTO aep.context_evidence_sizes(
+    evidence_id,project_id,work_id,evidence_type,observed_at,payload_bytes,provenance_bytes
+  ) VALUES (
+    NEW.evidence_id,NEW.project_id,NEW.work_id,NEW.evidence_type,NEW.observed_at,
+    octet_length(NEW.payload::text),octet_length(NEW.provenance::text)
+  );
+  RETURN NEW;
+END
+$function$;
+
+CREATE TRIGGER evidence_context_size_after_insert
+AFTER INSERT ON aep.evidence
+FOR EACH ROW EXECUTE FUNCTION aep.capture_context_evidence_sizes();
+
 -- A mutable latest-observation pointer is derived from append-only Evidence rows.
 -- It is scoped by Work, physical repository and branch ref, not by a session label.
 CREATE TABLE aep.context_source_heads (
@@ -84,6 +128,11 @@ BEGIN
 END
 $function$;
 
+CREATE TRIGGER context_evidence_sizes_append_only
+BEFORE UPDATE OR DELETE ON aep.context_evidence_sizes
+FOR EACH ROW EXECUTE FUNCTION aep.reject_context_record_mutation();
+
+
 CREATE TRIGGER context_packs_append_only
 BEFORE UPDATE OR DELETE ON aep.context_packs
 FOR EACH ROW EXECUTE FUNCTION aep.reject_context_record_mutation();
@@ -94,9 +143,166 @@ FOR EACH ROW EXECUTE FUNCTION aep.reject_context_record_mutation();
 
 -- The trusted prototype gate is a persisted project/resource scope check only.
 -- It does not authenticate a ChatGPT session or bind a native caller principal.
+-- A project-scoped transaction lock protocol serializes Context snapshot reads
+-- against every writer of state represented in a Pack. Readers hold a shared
+-- advisory transaction lock through cache validation/return. Writers take the
+-- matching exclusive lock before changing any relevant row.
+CREATE FUNCTION aep.lock_context_project_write()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, aep
+AS $function$
+DECLARE
+  v_project_ids uuid[];
+  v_project_id uuid;
+  v_resource_ids uuid[];
+BEGIN
+  IF TG_TABLE_NAME IN (
+    'projects','works','evidence','project_resources',
+    'work_resource_requirements','context_source_heads'
+  ) THEN
+    IF TG_OP <> 'DELETE' THEN
+      v_project_ids := array_append(v_project_ids, NEW.project_id);
+    END IF;
+    IF TG_OP <> 'INSERT' THEN
+      v_project_ids := array_append(v_project_ids, OLD.project_id);
+    END IF;
+
+  ELSIF TG_TABLE_NAME = 'work_relations' THEN
+    SELECT array_agg(DISTINCT work_row.project_id ORDER BY work_row.project_id)
+    INTO v_project_ids
+    FROM aep.works AS work_row
+    WHERE work_row.work_id IN (
+      SELECT relation_ids.work_id
+      FROM unnest(ARRAY[
+        CASE WHEN TG_OP <> 'INSERT' THEN OLD.source_work_id END,
+        CASE WHEN TG_OP <> 'INSERT' THEN OLD.target_work_id END,
+        CASE WHEN TG_OP <> 'DELETE' THEN NEW.source_work_id END,
+        CASE WHEN TG_OP <> 'DELETE' THEN NEW.target_work_id END
+      ]) AS relation_ids(work_id)
+      WHERE relation_ids.work_id IS NOT NULL
+    );
+
+  ELSIF TG_TABLE_NAME = 'dependency_graphs' THEN
+    SELECT array_agg(DISTINCT member_projects.project_id ORDER BY member_projects.project_id)
+    INTO v_project_ids
+    FROM (
+      SELECT CASE WHEN TG_OP <> 'INSERT' THEN OLD.owner_project_id END AS project_id
+      UNION
+      SELECT CASE WHEN TG_OP <> 'DELETE' THEN NEW.owner_project_id END
+      UNION
+      SELECT member_row.project_id
+      FROM aep.dependency_graph_members AS member_row
+      WHERE member_row.graph_id IN (
+        CASE WHEN TG_OP <> 'INSERT' THEN OLD.graph_id END,
+        CASE WHEN TG_OP <> 'DELETE' THEN NEW.graph_id END
+      )
+    ) AS member_projects
+    WHERE member_projects.project_id IS NOT NULL;
+
+  ELSIF TG_TABLE_NAME = 'dependency_graph_members' THEN
+    SELECT array_agg(DISTINCT member_projects.project_id ORDER BY member_projects.project_id)
+    INTO v_project_ids
+    FROM (
+      SELECT CASE WHEN TG_OP <> 'INSERT' THEN OLD.project_id END AS project_id
+      UNION
+      SELECT CASE WHEN TG_OP <> 'DELETE' THEN NEW.project_id END
+      UNION
+      SELECT graph_row.owner_project_id
+      FROM aep.dependency_graphs AS graph_row
+      WHERE graph_row.graph_id IN (
+        CASE WHEN TG_OP <> 'INSERT' THEN OLD.graph_id END,
+        CASE WHEN TG_OP <> 'DELETE' THEN NEW.graph_id END
+      )
+    ) AS member_projects
+    WHERE member_projects.project_id IS NOT NULL;
+
+  ELSIF TG_TABLE_NAME = 'owner_decisions' THEN
+    SELECT array_agg(DISTINCT scope_projects.project_id ORDER BY scope_projects.project_id)
+    INTO v_project_ids
+    FROM (
+      SELECT project_row.project_id
+      FROM aep.projects AS project_row
+      WHERE (
+        (TG_OP <> 'INSERT' AND OLD.scope_type = 'project'
+          AND project_row.project_id::text = OLD.scope_key)
+        OR
+        (TG_OP <> 'DELETE' AND NEW.scope_type = 'project'
+          AND project_row.project_id::text = NEW.scope_key)
+      )
+      UNION
+      SELECT work_row.project_id
+      FROM aep.works AS work_row
+      WHERE (
+        (TG_OP <> 'INSERT' AND OLD.scope_type = 'work'
+          AND work_row.work_id::text = OLD.scope_key)
+        OR
+        (TG_OP <> 'DELETE' AND NEW.scope_type = 'work'
+          AND work_row.work_id::text = NEW.scope_key)
+      )
+      UNION
+      SELECT project_resource.project_id
+      FROM aep.project_resources AS project_resource
+      WHERE (
+        (TG_OP <> 'INSERT' AND OLD.scope_type = 'resource'
+          AND project_resource.resource_id::text = OLD.scope_key)
+        OR
+        (TG_OP <> 'DELETE' AND NEW.scope_type = 'resource'
+          AND project_resource.resource_id::text = NEW.scope_key)
+      )
+    ) AS scope_projects;
+
+  ELSIF TG_TABLE_NAME = 'resources' THEN
+    SELECT array_agg(DISTINCT project_resource.project_id ORDER BY project_resource.project_id)
+    INTO v_project_ids
+    FROM aep.project_resources AS project_resource
+    WHERE project_resource.resource_id IN (
+      CASE WHEN TG_OP <> 'INSERT' THEN OLD.resource_id END,
+      CASE WHEN TG_OP <> 'DELETE' THEN NEW.resource_id END
+    );
+  END IF;
+
+  FOR v_project_id IN
+    SELECT DISTINCT project_id
+    FROM unnest(COALESCE(v_project_ids, ARRAY[]::uuid[])) AS item(project_id)
+    WHERE project_id IS NOT NULL
+    ORDER BY project_id
+  LOOP
+    PERFORM pg_advisory_xact_lock(
+      hashtextextended('aep.context-project:' || v_project_id::text, 0)
+    );
+  END LOOP;
+
+  IF TG_OP = 'DELETE' THEN
+    RETURN OLD;
+  END IF;
+  RETURN NEW;
+END
+$function$;
+
+DO $context_write_locks$
+DECLARE
+  table_name text;
+BEGIN
+  FOREACH table_name IN ARRAY ARRAY[
+    'projects','works','work_relations','dependency_graphs',
+    'dependency_graph_members','owner_decisions','resources',
+    'project_resources','work_resource_requirements','evidence',
+    'context_source_heads'
+  ] LOOP
+    EXECUTE format(
+      'CREATE TRIGGER context_project_write_lock BEFORE INSERT OR UPDATE OR DELETE ON aep.%I FOR EACH ROW EXECUTE FUNCTION aep.lock_context_project_write()',
+      table_name
+    );
+  END LOOP;
+END
+$context_write_locks$;
+
 CREATE FUNCTION aep.context_project_resource_allowed(
   p_project_id uuid,
-  p_resource_id uuid
+  p_resource_id uuid,
+  p_exclusive boolean DEFAULT false
 )
 RETURNS boolean
 LANGUAGE plpgsql
@@ -113,6 +319,19 @@ DECLARE
   v_decision_scope_type text;
   v_decision_scope_key text;
 BEGIN
+  -- Context snapshots and relevant writes share a project-scoped advisory lock.
+  -- Source-revision recording requests an exclusive lock; compile/fetch request
+  -- a shared lock. The lock remains held until the caller's transaction ends.
+  IF p_exclusive THEN
+    PERFORM pg_advisory_xact_lock(
+      hashtextextended('aep.context-project:' || p_project_id::text, 0)
+    );
+  ELSE
+    PERFORM pg_advisory_xact_lock_shared(
+      hashtextextended('aep.context-project:' || p_project_id::text, 0)
+    );
+  END IF;
+
   -- Keep the project/resource grant stable for the whole calling transaction.
   -- A concurrent revoke/archive/status change must wait until Context retrieval
   -- has either completed or rolled back.
@@ -188,6 +407,7 @@ DECLARE
   v_dependencies jsonb;
   v_decisions jsonb;
   v_evidence jsonb;
+  v_evidence_summary jsonb;
   v_related_work_ids uuid[];
 BEGIN
   SELECT jsonb_build_object(
@@ -367,25 +587,97 @@ BEGIN
      OR (decision_row.scope_type = 'work'
          AND decision_row.scope_key IN (SELECT unnest(v_related_work_ids)::text));
 
-  SELECT COALESCE(jsonb_agg(jsonb_build_object(
-    'evidence_id', evidence_row.evidence_id,
-    'work_id', evidence_row.work_id,
-    'evidence_type', evidence_row.evidence_type,
-    'source_ref', evidence_row.source_ref,
-    'source_revision', evidence_row.source_revision,
-    'content_sha256', evidence_row.content_sha256,
-    'payload_sha256', encode(
-      public.digest(convert_to(evidence_row.payload::text, 'UTF8'), 'sha256'), 'hex'
-    ),
-    'observed_at', evidence_row.observed_at,
-    'valid_at', evidence_row.valid_at,
-    'provenance', evidence_row.provenance,
-    'payload', evidence_row.payload
-  ) ORDER BY evidence_row.observed_at DESC, evidence_row.evidence_id), '[]'::jsonb)
-  INTO v_evidence
-  FROM aep.evidence AS evidence_row
-  WHERE evidence_row.project_id = p_project_id
-    AND evidence_row.work_id = ANY(v_related_work_ids);
+  -- Select bounded Evidence metadata first. Payload rows are fetched only after
+  -- per-item and aggregate byte limits have been applied to persisted size fields.
+  WITH total_evidence AS MATERIALIZED (
+    SELECT
+      count(*)::bigint AS total_count,
+      count(*) FILTER (
+        WHERE size_row.payload_bytes > 16384
+           OR size_row.provenance_bytes > 8192
+      )::bigint AS oversized_count
+    FROM aep.context_evidence_sizes AS size_row
+    WHERE size_row.project_id = p_project_id
+      AND size_row.work_id = ANY(v_related_work_ids)
+      AND size_row.evidence_type <> 'repository_revision'
+  ),
+  candidate_metadata AS MATERIALIZED (
+    SELECT
+      size_row.evidence_id,
+      size_row.work_id,
+      size_row.evidence_type,
+      size_row.observed_at,
+      size_row.payload_bytes,
+      size_row.provenance_bytes
+    FROM aep.context_evidence_sizes AS size_row
+    WHERE size_row.project_id = p_project_id
+      AND size_row.work_id = ANY(v_related_work_ids)
+      AND size_row.evidence_type <> 'repository_revision'
+      AND size_row.payload_bytes <= 16384
+      AND size_row.provenance_bytes <= 8192
+    ORDER BY size_row.observed_at DESC, size_row.evidence_id DESC
+    LIMIT 128
+  ),
+  bounded_metadata AS MATERIALIZED (
+    SELECT candidate_metadata.*,
+      sum(payload_bytes + provenance_bytes) OVER (
+        ORDER BY observed_at DESC, evidence_id DESC
+      ) AS cumulative_materialized_bytes
+    FROM candidate_metadata
+  ),
+  selected_metadata AS MATERIALIZED (
+    SELECT *
+    FROM bounded_metadata
+    WHERE cumulative_materialized_bytes <= 262144
+  ),
+  candidate_stats AS (
+    SELECT count(*)::bigint AS candidate_count FROM candidate_metadata
+  ),
+  selected_evidence AS (
+    SELECT
+      COALESCE(jsonb_agg(jsonb_build_object(
+        'evidence_id', evidence_row.evidence_id,
+        'work_id', evidence_row.work_id,
+        'evidence_type', evidence_row.evidence_type,
+        'source_ref', evidence_row.source_ref,
+        'source_revision', evidence_row.source_revision,
+        'content_sha256', evidence_row.content_sha256,
+        'payload_sha256', encode(
+          public.digest(convert_to(evidence_row.payload::text, 'UTF8'), 'sha256'), 'hex'
+        ),
+        'payload_bytes', selected.payload_bytes,
+        'provenance_bytes', selected.provenance_bytes,
+        'observed_at', evidence_row.observed_at,
+        'valid_at', evidence_row.valid_at,
+        'provenance', evidence_row.provenance,
+        'payload', evidence_row.payload
+      ) ORDER BY evidence_row.observed_at DESC, evidence_row.evidence_id DESC), '[]'::jsonb)
+        AS evidence_payload,
+      count(*)::bigint AS selected_count,
+      COALESCE(sum(selected.payload_bytes + selected.provenance_bytes),0)::bigint
+        AS selected_materialized_bytes
+    FROM selected_metadata AS selected
+    JOIN aep.evidence AS evidence_row
+      ON evidence_row.evidence_id = selected.evidence_id
+  )
+  SELECT
+    selected_evidence.evidence_payload,
+    jsonb_build_object(
+      'total_count', total_evidence.total_count,
+      'oversized_count', total_evidence.oversized_count,
+      'candidate_count', candidate_stats.candidate_count,
+      'selected_count', selected_evidence.selected_count,
+      'omitted_count', total_evidence.total_count - selected_evidence.selected_count,
+      'selected_materialized_bytes', selected_evidence.selected_materialized_bytes,
+      'max_payload_bytes_per_item', 16384,
+      'max_provenance_bytes_per_item', 8192,
+      'max_candidate_count', 128,
+      'max_selected_materialized_bytes', 262144
+    )
+  INTO v_evidence, v_evidence_summary
+  FROM total_evidence
+  CROSS JOIN candidate_stats
+  CROSS JOIN selected_evidence;
 
   RETURN jsonb_build_object(
     'project', v_project,
@@ -395,6 +687,7 @@ BEGIN
     'project_resource_grant', v_grant,
     'repository_revision', v_repository,
     'decisions', v_decisions,
+    'evidence_summary', v_evidence_summary,
     'evidence', v_evidence
   );
 END
@@ -447,7 +740,7 @@ BEGIN
       USING ERRCODE = '22023';
   END IF;
 
-  IF NOT aep.context_project_resource_allowed(p_project_id, p_resource_id) THEN
+  IF NOT aep.context_project_resource_allowed(p_project_id, p_resource_id, true) THEN
     INSERT INTO aep.context_retrieval_events(
       operation, outcome, project_id, work_id, resource_id, session_id,
       source_count, source_bytes
@@ -595,7 +888,7 @@ DECLARE
   v_evidence jsonb;
   v_selected jsonb := '[]'::jsonb;
   v_item jsonb;
-  v_evidence_count integer;
+  v_evidence_count bigint;
   v_selected_count integer := 0;
   v_estimated_tokens integer;
   v_rows integer;
@@ -642,13 +935,10 @@ BEGIN
     'token_budget',p_token_budget
   )::text, 'UTF8'), 'sha256'), 'hex');
 
-  SELECT COALESCE(jsonb_agg(entry.value ORDER BY entry.ordinality), '[]'::jsonb)
-  INTO v_evidence
-  FROM jsonb_array_elements(v_snapshot->'evidence')
-    WITH ORDINALITY AS entry(value, ordinality)
-  WHERE entry.value->>'evidence_type' <> 'repository_revision';
-
-  v_evidence_count := jsonb_array_length(v_evidence);
+  v_evidence := v_snapshot->'evidence';
+  v_evidence_count := COALESCE(
+    (v_snapshot #>> '{evidence_summary,total_count}')::bigint, 0
+  );
   v_payload_base := jsonb_build_object(
     'pack_schema_version',1,
     'project',v_snapshot->'project',
@@ -669,6 +959,7 @@ BEGIN
     'token_estimation_method','ceil_utf8_bytes_div_4',
     'source_evidence',v_selected,
     'source_evidence_count',v_evidence_count,
+    'source_evidence_selection',v_snapshot->'evidence_summary',
     'source_evidence_included',0,
     'source_evidence_truncated_count',v_evidence_count,
     'truncated',v_evidence_count > 0,
@@ -913,10 +1204,13 @@ END
 $function$;
 
 ALTER TABLE aep.context_source_heads OWNER TO aep_owner;
+ALTER TABLE aep.context_evidence_sizes OWNER TO aep_owner;
 ALTER TABLE aep.context_packs OWNER TO aep_owner;
 ALTER TABLE aep.context_retrieval_events OWNER TO aep_owner;
 ALTER FUNCTION aep.reject_context_record_mutation() OWNER TO aep_owner;
-ALTER FUNCTION aep.context_project_resource_allowed(uuid,uuid) OWNER TO aep_owner;
+ALTER FUNCTION aep.lock_context_project_write() OWNER TO aep_owner;
+ALTER FUNCTION aep.capture_context_evidence_sizes() OWNER TO aep_owner;
+ALTER FUNCTION aep.context_project_resource_allowed(uuid,uuid,boolean) OWNER TO aep_owner;
 ALTER FUNCTION aep.build_context_pack_snapshot(uuid,uuid,uuid,text) OWNER TO aep_owner;
 ALTER FUNCTION aep.record_context_source_revision(uuid,uuid,uuid,text,uuid,text,text,text,jsonb)
   OWNER TO aep_owner;
@@ -929,7 +1223,7 @@ DECLARE
   table_name text;
 BEGIN
   FOREACH table_name IN ARRAY ARRAY[
-    'context_source_heads','context_packs','context_retrieval_events'
+    'context_source_heads','context_evidence_sizes','context_packs','context_retrieval_events'
   ] LOOP
     EXECUTE format('ALTER TABLE aep.%I ENABLE ROW LEVEL SECURITY',table_name);
     EXECUTE format('ALTER TABLE aep.%I FORCE ROW LEVEL SECURITY',table_name);
@@ -941,10 +1235,12 @@ BEGIN
 END
 $policy$;
 
-REVOKE ALL ON TABLE aep.context_source_heads,aep.context_packs,aep.context_retrieval_events
+REVOKE ALL ON TABLE aep.context_source_heads,aep.context_evidence_sizes,aep.context_packs,aep.context_retrieval_events
   FROM PUBLIC,aep_runtime;
 REVOKE ALL ON FUNCTION aep.reject_context_record_mutation() FROM PUBLIC,aep_runtime;
-REVOKE ALL ON FUNCTION aep.context_project_resource_allowed(uuid,uuid) FROM PUBLIC,aep_runtime;
+REVOKE ALL ON FUNCTION aep.lock_context_project_write() FROM PUBLIC,aep_runtime;
+REVOKE ALL ON FUNCTION aep.capture_context_evidence_sizes() FROM PUBLIC,aep_runtime;
+REVOKE ALL ON FUNCTION aep.context_project_resource_allowed(uuid,uuid,boolean) FROM PUBLIC,aep_runtime;
 REVOKE ALL ON FUNCTION aep.build_context_pack_snapshot(uuid,uuid,uuid,text) FROM PUBLIC,aep_runtime;
 REVOKE ALL ON FUNCTION aep.record_context_source_revision(uuid,uuid,uuid,text,uuid,text,text,text,jsonb)
   FROM PUBLIC;

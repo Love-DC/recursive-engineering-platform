@@ -88,11 +88,11 @@ def test_runtime_access_boundary() -> None:
             "SELECT has_table_privilege('aep_runtime',"
             f"{lit('aep.'+table)},'SELECT')::text;"
         )
-        for table in ("context_source_heads","context_packs","context_retrieval_events")
+        for table in ("context_source_heads","context_evidence_sizes","context_packs","context_retrieval_events")
     ]
     if checks != ["true","true","true"]:
         raise AssertionError(f"Runtime RPC grants are incorrect: {checks}")
-    if table_checks != ["false","false","false"]:
+    if table_checks != ["false","false","false","false"]:
         raise AssertionError(f"Runtime role has direct Context table access: {table_checks}")
 
 
@@ -397,6 +397,96 @@ def test_compilation_cache_and_provenance(
     return pack_id
 
 
+def test_snapshot_write_serialization(
+    project_id: str, resource_id: str, work_id: str, dependency_id: str,
+    pack_id: str, session_id: str,
+) -> None:
+    """Hold a real Pack fetch transaction open and prove all snapshot writers wait."""
+    graph_id = scalar(
+        "SELECT dependency_graph_id::text FROM aep.work_relations "
+        f"WHERE source_work_id={lit(work_id)}::uuid "
+        "AND relation_type='depends_on' AND status='active' LIMIT 1;"
+    )
+    decision_id = scalar(
+        "SELECT decision_id::text FROM aep.owner_decisions "
+        f"WHERE scope_type='work' AND scope_key={lit(work_id)} "
+        "AND decision_key='context-guidance';"
+    )
+    cmd = [
+        "psql", "-X", "-q", "-A", "-t", "-v", "ON_ERROR_STOP=1",
+        "-h", HOST, "-p", PORT, "-U", USER, "-d", DATABASE,
+    ]
+    env = os.environ.copy()
+    env["PGPASSWORD"] = PASSWORD
+    sql = (
+        "BEGIN;\n"
+        "SELECT aep.get_context_pack("
+        f"{lit(pack_id)}::uuid,{lit(str(uuid4()))}::uuid,8192,"
+        "'context-compiler/1','evidence-json/1','default/1')->>'status';\n"
+        "SELECT pg_sleep(4);\n"
+        "COMMIT;\n"
+    )
+    reader = subprocess.Popen(
+        cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, bufsize=1, env=env,
+    )
+    assert reader.stdin is not None and reader.stdout is not None
+    reader.stdin.write(sql)
+    reader.stdin.flush()
+    reader.stdin.close()
+    status = reader.stdout.readline().strip()
+    if status != "ready":
+        reader.kill()
+        reader.wait()
+        raise AssertionError(f"snapshot reader did not return a validated Pack: {status!r}")
+
+    writer_statements = [
+        ("Work update",
+         "UPDATE aep.works SET title=title || ' concurrent mutation',version=version+1 "
+         f"WHERE work_id={lit(work_id)}::uuid;"),
+        ("Dependency edge update",
+         "UPDATE aep.work_relations SET status='removed',removed_at=clock_timestamp() "
+         f"WHERE source_work_id={lit(work_id)}::uuid "
+         f"AND target_work_id={lit(dependency_id)}::uuid;"),
+        ("Dependency graph update",
+         "UPDATE aep.dependency_graphs SET graph_version=graph_version+1 "
+         f"WHERE graph_id={lit(graph_id)}::uuid;"),
+        ("OwnerDecision update",
+         "UPDATE aep.owner_decisions SET statement=statement || ' concurrent mutation' "
+         f"WHERE decision_id={lit(decision_id)}::uuid;"),
+        ("Evidence insert",
+         "INSERT INTO aep.evidence(project_id,work_id,evidence_type,source_ref,"
+         "content_sha256,provenance,payload) VALUES("
+         f"{lit(project_id)}::uuid,{lit(work_id)}::uuid,'source_observation',"
+         "'artifact://concurrency/blocked',"
+         f"{lit('a'*64)},'{{}}'::jsonb,'{{\"blocked\":true}}'::jsonb);"),
+        ("ProjectResource grant update",
+         "UPDATE aep.project_resources SET grant_version=grant_version+1 "
+         f"WHERE project_id={lit(project_id)}::uuid "
+         f"AND resource_id={lit(resource_id)}::uuid;"),
+        ("Repository source revision",
+         "SELECT aep.record_context_source_revision("
+         f"{lit(project_id)}::uuid,{lit(work_id)}::uuid,{lit(resource_id)}::uuid,"
+         f"'refs/heads/main',{lit(session_id)}::uuid,{lit('4'*40)},"
+         f"{lit('5'*40)},{lit('6'*64)},'{{\"adapter\":\"concurrency-test\"}}'::jsonb);"),
+    ]
+    for label, statement in writer_statements:
+        attempt = psql("SET lock_timeout='150ms'; " + statement, check=False)
+        if attempt.returncode == 0 or "lock timeout" not in attempt.stderr.lower():
+            reader.kill()
+            reader.wait()
+            raise AssertionError(
+                f"{label} was not serialized behind the Pack snapshot transaction: "
+                f"exit={attempt.returncode}, stdout={attempt.stdout}, stderr={attempt.stderr}"
+            )
+
+    reader.wait(timeout=10)
+    output = reader.stdout.read()
+    error = reader.stderr.read() if reader.stderr else ""
+    if reader.returncode != 0:
+        raise RuntimeError(f"snapshot reader failed: {output} {error}")
+
+
 def test_state_invalidation(
     project_id: str, resource_id: str, work_id: str, dependency_id: str,
     session_id: str, pack_id: str, grant_decision_id: str,
@@ -510,10 +600,29 @@ def test_denied_project_is_rejected_before_retrieval(
 def test_budget_truncation(
     project_id: str, resource_id: str, work_id: str, session_id: str,
 ) -> None:
-    insert_evidence(
-        project_id, work_id, "artifact://stage4b/large-source",
-        "LARGE_SOURCE_CONTENT_" * 900,
-        "large-source-v1",
+    # Seed 25 oversized payloads plus 140 small records in two INSERTs.
+    # The snapshot builder must choose from byte metadata before fetching any payload.
+    psql(
+        "WITH fixtures AS ("
+        "SELECT 'artifact://stage4b/large/' || n::text AS source_ref,"
+        "'large-' || n::text AS source_revision,"
+        "jsonb_build_object('kind','source_observation',"
+        "'text',repeat('LARGE_SOURCE_CONTENT_' || n::text,900)) AS payload "
+        "FROM generate_series(1,25) AS series(n) "
+        "UNION ALL "
+        "SELECT 'artifact://stage4b/small/' || n::text,"
+        "'small-' || n::text,"
+        "jsonb_build_object('kind','source_observation','text','small fact ' || n::text) "
+        "FROM generate_series(1,140) AS series(n)"
+        ") INSERT INTO aep.evidence("
+        "project_id,work_id,evidence_type,source_ref,source_revision,content_sha256,"
+        "provenance,payload"
+        ") SELECT "
+        f"{lit(project_id)}::uuid,{lit(work_id)}::uuid,'source_observation',"
+        "fixtures.source_ref,fixtures.source_revision,"
+        "encode(public.digest(convert_to(fixtures.payload::text,'UTF8'),'sha256'),'hex'),"
+        "jsonb_build_object('provider','test-fixture','observation','bounded-size-fixture'),"
+        "fixtures.payload FROM fixtures;"
     )
     compiled = compile_pack(
         project_id, work_id, resource_id, session_id, budget=3000
@@ -528,6 +637,18 @@ def test_budget_truncation(
         raise AssertionError("truncated Context Pack exceeded its declared token budget")
     if "LARGE_SOURCE_CONTENT_" in json.dumps(payload):
         raise AssertionError("truncated source content leaked into the returned Context Pack")
+    selection = payload["source_evidence_selection"]
+    if selection["total_count"] != 165 or selection["oversized_count"] != 25:
+        raise AssertionError(f"bounded selection summary is incorrect: {selection}")
+    if selection["candidate_count"] > 128 or selection["selected_count"] > 128:
+        raise AssertionError("Evidence metadata candidate/selection count exceeded 128")
+    if selection["selected_materialized_bytes"] > 262144:
+        raise AssertionError("Evidence payload/provenance materialization exceeded 256 KiB")
+    for evidence in payload["source_evidence"]:
+        if evidence["payload_bytes"] > 16384 or evidence["provenance_bytes"] > 8192:
+            raise AssertionError("oversized Evidence reached the Context Pack payload")
+    if payload["source_evidence_count"] != 165:
+        raise AssertionError("Context Pack did not preserve total Evidence count");
 
 
 def main() -> None:
@@ -538,6 +659,10 @@ def main() -> None:
     session_id = str(uuid4())
     pack_id = test_compilation_cache_and_provenance(
         project_id, resource_id, work_id, dependency_id, session_id
+    )
+    test_snapshot_write_serialization(
+        project_id, resource_id, work_id, dependency_id,
+        pack_id, session_id
     )
     test_state_invalidation(
         project_id, resource_id, work_id, dependency_id,
