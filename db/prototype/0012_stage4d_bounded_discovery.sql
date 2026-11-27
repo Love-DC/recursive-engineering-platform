@@ -90,13 +90,14 @@ CREATE TABLE aep.discovery_observations (
   required_child boolean,
   reserved_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   completed_at timestamptz,
+  observed_at timestamptz,
   UNIQUE(pass_id, call_key),
   CHECK (
-    (status = 'reserved' AND completed_at IS NULL AND result_sha256 IS NULL
-      AND evidence_id IS NULL AND decision IS NULL)
+    (status = 'reserved' AND completed_at IS NULL AND observed_at IS NULL
+      AND result_sha256 IS NULL AND evidence_id IS NULL AND decision IS NULL)
     OR
-    (status = 'completed' AND completed_at IS NOT NULL AND result_sha256 IS NOT NULL
-      AND evidence_id IS NOT NULL AND decision IS NOT NULL)
+    (status = 'completed' AND completed_at IS NOT NULL AND observed_at IS NOT NULL
+      AND result_sha256 IS NOT NULL AND evidence_id IS NOT NULL AND decision IS NOT NULL)
   ),
   CHECK (
     (status='reserved' AND parent_work_id IS NULL AND parent_observation_id IS NULL AND depth IS NULL)
@@ -160,14 +161,14 @@ BEGIN
       'raw_payload','evidence_id','result_sha256','result_payload','actual_tokens',
       'actual_cost_micros','status','decision','decision_reason','candidate_payload',
       'candidate_fingerprint','work_id','parent_work_id','parent_observation_id',
-      'depth','required_child','completed_at'
+      'depth','required_child','completed_at','observed_at'
     ]) IS DISTINCT FROM
      (to_jsonb(OLD) - ARRAY[
       'cursor_after','resume_cursor','source_revision','content_sha256','provenance',
       'raw_payload','evidence_id','result_sha256','result_payload','actual_tokens',
       'actual_cost_micros','status','decision','decision_reason','candidate_payload',
       'candidate_fingerprint','work_id','parent_work_id','parent_observation_id',
-      'depth','required_child','completed_at'
+      'depth','required_child','completed_at','observed_at'
     ]) THEN
     RAISE EXCEPTION 'Discovery reservation identity and budget estimate are immutable'
       USING ERRCODE = '55000';
@@ -671,6 +672,7 @@ DECLARE
   v_stop_reason text;
   v_resume_cursor jsonb;
   v_source_allowed boolean;
+  v_observed_at timestamptz;
 BEGIN
   IF p_project_id IS NULL OR p_resource_id IS NULL OR p_pass_id IS NULL OR p_session_id IS NULL
      OR p_call_key IS NULL OR length(btrim(p_call_key)) NOT BETWEEN 1 AND 160
@@ -782,7 +784,7 @@ BEGIN
         USING ERRCODE = '22023';
     END IF;
     v_candidate_fingerprint := encode(public.digest(convert_to(
-      p_project_id::text || '|' || p_resource_id::text || '|discovery_candidate_v1|' || v_candidate_key,
+      p_project_id::text || '|discovery_candidate_v1|' || v_candidate_key,
       'UTF8'),'sha256'),'hex');
 
     SELECT * INTO v_project_resource FROM aep.project_resources
@@ -867,9 +869,10 @@ BEGIN
     END IF;
   END IF;
 
+  v_observed_at := clock_timestamp();
   INSERT INTO aep.evidence(
     project_id,work_id,evidence_type,source_ref,source_revision,
-    content_sha256,provenance,payload
+    content_sha256,provenance,payload,observed_at
   ) VALUES (
     p_project_id,v_work_id,'discovery_observation',v_observation.source_ref,
     p_source_revision,p_content_sha256,
@@ -878,7 +881,7 @@ BEGIN
       'resource_id',p_resource_id,'source_kind',v_observation.source_kind,
       'session_id',p_session_id,'candidate_fingerprint',v_candidate_fingerprint
     ),
-    p_raw_payload
+    p_raw_payload,v_observed_at
   ) RETURNING evidence_id INTO v_evidence_id;
 
   v_tokens_reserved := v_pass.tokens_reserved-v_observation.estimated_tokens;
@@ -908,7 +911,8 @@ BEGIN
   v_result := jsonb_build_object(
     'status',CASE WHEN v_stop_reason IS NULL THEN 'recorded' ELSE 'stopped' END,
     'decision',v_decision,'reason',v_reason,'work_id',v_work_id,
-    'evidence_id',v_evidence_id,'candidate_fingerprint',v_candidate_fingerprint,
+    'evidence_id',v_evidence_id,'observed_at',v_observed_at,
+    'candidate_fingerprint',v_candidate_fingerprint,
     'resume_cursor',v_resume_cursor,'stop_reason',v_stop_reason,
     'tokens_used',v_tokens_used,'cost_used_micros',v_cost_used,
     'no_progress_count',v_no_progress
@@ -925,7 +929,7 @@ BEGIN
     work_id=v_work_id,parent_work_id=v_parent_work_id,
     parent_observation_id=v_parent_observation_id,depth=v_depth,
     required_child=CASE WHEN v_parent_work_id IS NULL THEN NULL ELSE v_required_child END,
-    completed_at=clock_timestamp()
+    completed_at=v_observed_at,observed_at=v_observed_at
   WHERE observation_id=v_observation.observation_id;
 
   UPDATE aep.discovery_passes SET
@@ -1029,7 +1033,7 @@ BEGIN
       'cursor_before',cursor_before,'cursor_after',cursor_after,
       'resume_cursor',resume_cursor,'actual_tokens',actual_tokens,
       'actual_cost_micros',actual_cost_micros,'reserved_at',reserved_at,
-      'completed_at',completed_at
+      'completed_at',completed_at,'observed_at',observed_at
     ) AS value,reserved_at
     FROM aep.discovery_observations
     WHERE project_id=p_project_id AND resource_id=p_resource_id
