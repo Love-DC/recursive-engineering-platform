@@ -211,7 +211,10 @@ def test_idempotency_determinism_and_provenance() -> tuple[str, str, str, str, s
         if row[key] != expected:
             raise AssertionError(f"Derived memory {key} mismatch: {row[key]!r} != {expected!r}")
 
-    if not row["observed_at"] or row["valid_at"] != valid_at:
+    if not row["observed_at"] or scalar(
+        "SELECT (valid_at = '2026-11-20T08:30:00Z'::timestamptz)::text "
+        f"FROM aep.derived_memories WHERE derived_memory_id={lit(memory_id)}::uuid;"
+    ) != "true":
         raise AssertionError("Derived memory observed_at/valid_at timestamps are incomplete")
     if row["source_evidence_ids"] != [evidence_a, evidence_b] and set(
         row["source_evidence_ids"]
@@ -346,7 +349,11 @@ def test_source_and_decision_invalidation(
         "stale",
         "Context Pack after OwnerDecision change",
     )
-    return new_memory_id
+    decision_rebuild = rebuild(project_id, work_id, resource_id, session_id)
+    assert_status(decision_rebuild, "ready", "rebuild after OwnerDecision change")
+    if decision_rebuild["derived_memory_id"] == new_memory_id:
+        raise AssertionError("Changed OwnerDecision reused the invalidated derived-memory row")
+    return decision_rebuild["derived_memory_id"]
 
 
 def test_evidence_work_grant_resource_invalidation(
