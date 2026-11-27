@@ -91,7 +91,7 @@ Authoritative behavioral definitions are in [Snapshot v2.0](https://github.com/L
 Schema-only partial results remain distinct from end-to-end passes. Successful CI is evidence for the exact tested prototype behavior, not automatic Owner acceptance of deferred decisions or production readiness.
 
 
-## Stage 4B Context Compiler candidate evidence (six independent reviews completed; two documentation lifecycle corrections pending)
+## Stage 4B Context Compiler candidate evidence (six independent reviews completed; lifecycle corrections committed; seventh review pending)
 
 - Additive prototype migration: `db/prototype/0010_stage4b_context_compiler.sql`.
 - Test runner: `scripts/test_stage4b_context_compiler.py`; the Stage 4A runner continues to apply only 0001–0009 so its baseline remains independently reproducible.
