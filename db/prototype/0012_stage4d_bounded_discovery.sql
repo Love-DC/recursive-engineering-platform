@@ -214,6 +214,7 @@ DECLARE
   v_source record;
   v_reserved_observation aep.discovery_observations%ROWTYPE;
   v_has_reserved_observation boolean := false;
+  v_recovered_inflight boolean := false;
   v_max_depth integer;
   v_max_fanout integer;
   v_max_tool_calls integer;
@@ -327,11 +328,7 @@ BEGIN
         'current_cursor',v_prior.current_cursor
       );
     END IF;
-    IF v_prior.status='stopped' AND v_has_reserved_observation THEN
-      RAISE EXCEPTION 'Stopped pass contains an unexpected reserved discovery call'
-        USING ERRCODE = '55000';
-    END IF;
-    IF v_has_reserved_observation THEN
+    IF v_has_reserved_observation AND v_prior.status='running' THEN
       -- A new session explicitly supersedes the old read reservation. The old
       -- model session may still return, but the stopped-pass check in
       -- complete_discovery_call fences that late result before Evidence/Work writes.
@@ -344,6 +341,7 @@ BEGIN
         cost_reserved_micros=0,updated_at=clock_timestamp()
       WHERE pass_id=v_prior.pass_id
       RETURNING * INTO v_prior;
+      v_recovered_inflight := true;
       INSERT INTO aep.discovery_pass_events(
         pass_id,project_id,resource_id,session_id,event_type,event_payload
       ) VALUES (
@@ -428,6 +426,10 @@ BEGIN
       'tokens_used',v_existing.tokens_used,'cost_used_micros',v_existing.cost_used_micros,
       'no_progress_count',v_existing.no_progress_count,'idempotent_replay',true
     );
+  END IF;
+  IF v_has_reserved_observation AND NOT v_recovered_inflight THEN
+    RAISE EXCEPTION 'A stopped pass with a superseded read can only replay its existing recovery request'
+      USING ERRCODE = '55000';
   END IF;
 
   -- Independent active sessions may scan concurrently. The existing Work Registry's
