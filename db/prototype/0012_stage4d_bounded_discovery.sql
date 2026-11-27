@@ -350,7 +350,7 @@ BEGIN
         v_prior.pass_id,p_project_id,p_resource_id,p_session_id,'pass_yielded',
         jsonb_build_object(
           'reason','superseded_inflight_read',
-          'old_session_id',v_reserved_observation.pass_id,
+          'old_session_id',v_prior.session_id,
           'observation_id',v_reserved_observation.observation_id,
           'late_result_disposition','ignored',
           'resume_cursor',v_prior.resume_cursor
