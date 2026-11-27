@@ -66,6 +66,6 @@ This path was exercised on an isolated Supabase PostgreSQL 17.12 project on 2026
 - `aep_runtime` had zero direct table SELECT privileges and execute access to 29 SECURITY DEFINER RPCs.
 - The adapter manifest was registered; an AEP Work was registered, made READY, claimed, and recovered from a new session ID.
 - Exact repository revision evidence was recorded and the Stage 4B Context Pack compiled successfully.
-- A real low-risk Hexa Game Kernel documentation Work was delivered through PR, exact-head CI, process review, merge, and post-merge verification.
+- A low-risk Hexa Game Kernel documentation Work was delivered through [PR #10](https://github.com/Love-DC/Hexa-Game-Kernel/pull/10), exact-head [Run #62](https://github.com/Love-DC/Hexa-Game-Kernel/actions/runs/45978584401), process review ([review #6086480224](https://github.com/Love-DC/Hexa-Game-Kernel/pull/10#pullrequestreview-6086480224)), merge `3c644d55c3439ffb2485c90dc9dad00a6001f803`, and exact-merge [Run #63](https://github.com/Love-DC/Hexa-Game-Kernel/actions/runs/45979289706); both CI runs passed on Ubuntu 24.04 and Windows 2025.
 
 These results establish a working **non-production A0 pilot**, not production readiness. Authenticated caller-to-project binding, hostile multi-tenant isolation, production write-path authorization, independent-principal GitHub approval, deployment, and unattended LLM execution remain outside this path. The retired RAE Supabase project was not accessed or modified.
