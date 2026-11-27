@@ -50,8 +50,6 @@ CREATE TABLE aep.discovery_passes (
 
 CREATE INDEX discovery_passes_scope_status_idx
   ON aep.discovery_passes(project_id, resource_id, status, started_at DESC);
-CREATE UNIQUE INDEX discovery_one_running_pass_per_scope_uq
-  ON aep.discovery_passes(project_id,resource_id) WHERE status='running';
 
 CREATE TABLE aep.discovery_observations (
   observation_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -376,16 +374,8 @@ BEGIN
     );
   END IF;
 
-  SELECT * INTO v_existing FROM aep.discovery_passes
-  WHERE project_id=p_project_id AND resource_id=p_resource_id AND status='running'
-  ORDER BY started_at DESC LIMIT 1
-  FOR UPDATE;
-  IF FOUND THEN
-    RETURN jsonb_build_object(
-      'status','active_pass_exists','pass_id',v_existing.pass_id,
-      'resume_cursor',v_existing.resume_cursor
-    );
-  END IF;
+  -- Independent active sessions may scan concurrently. The existing Work Registry's
+  -- canonical identity constraint serializes duplicate candidates at commit time.
 
   INSERT INTO aep.discovery_passes(
     project_id,resource_id,session_id,request_key,request_payload,
