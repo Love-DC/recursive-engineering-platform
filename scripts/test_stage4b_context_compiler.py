@@ -950,6 +950,77 @@ def test_snapshot_write_serialization(
         raise RuntimeError(f"snapshot reader failed: {output} {error}")
 
 
+
+def test_context_rpc_isolation_contract(
+    project_id: str, resource_id: str, work_id: str,
+    session_id: str, pack_id: str,
+) -> None:
+    """All public Context RPCs reject snapshots that can predate a revocation."""
+
+    calls = [
+        (
+            "source revision recording",
+            "aep.record_context_source_revision("
+            f"{lit(project_id)}::uuid,{lit(work_id)}::uuid,{lit(resource_id)}::uuid,"
+            f"'refs/heads/main',{lit(str(uuid4()))}::uuid,"
+            f"{lit('a' * 40)},{lit('b' * 40)},{lit('c' * 64)},"
+            f"{json_sql({'adapter':'repeatable-read-rejection-test'})})",
+        ),
+        (
+            "Context Pack compilation",
+            "aep.compile_context_pack("
+            f"{lit(project_id)}::uuid,{lit(work_id)}::uuid,{lit(resource_id)}::uuid,"
+            f"'refs/heads/main',{lit(session_id)}::uuid,8192,"
+            "'context-compiler/1','evidence-json/1','default/1')",
+        ),
+        (
+            "Context Pack retrieval",
+            "aep.get_context_pack("
+            f"{lit(pack_id)}::uuid,{lit(session_id)}::uuid,8192,"
+            "'context-compiler/1','evidence-json/1','default/1')",
+        ),
+    ]
+
+    for label, function_call in calls:
+        # SELECT 1 establishes the REPEATABLE READ snapshot before the RPC starts.
+        # The DO block catches only the documented SQLSTATE; a returned status or a
+        # different error makes the test fail rather than being mistaken for denial.
+        sql = (
+            "BEGIN ISOLATION LEVEL REPEATABLE READ;\\n"
+            "SELECT 1;\\n"
+            "DO $isolation$\\n"
+            "DECLARE v_message text;\\n"
+            "BEGIN\\n"
+            "  BEGIN\\n"
+            f"    PERFORM {function_call};\\n"
+            f"    RAISE EXCEPTION 'Context RPC {label} unexpectedly accepted REPEATABLE READ';\\n"
+            "  EXCEPTION WHEN SQLSTATE '25001' THEN\\n"
+            "    GET STACKED DIAGNOSTICS v_message = MESSAGE_TEXT;\\n"
+            "    IF position('READ COMMITTED' IN v_message) = 0 THEN\\n"
+            "      RAISE EXCEPTION 'Unexpected isolation rejection message: %', v_message;\\n"
+            "    END IF;\\n"
+            "  END;\\n"
+            "END\\n"
+            "$isolation$;\\n"
+            "COMMIT;"
+        )
+        psql(sql)
+
+    # Existing callers using READ COMMITTED remain supported, including cache fetch.
+    control = scalar(
+        "BEGIN ISOLATION LEVEL READ COMMITTED; "
+        "SELECT aep.get_context_pack("
+        f"{lit(pack_id)}::uuid,{lit(session_id)}::uuid,8192,"
+        "'context-compiler/1','evidence-json/1','default/1')->>'status'; "
+        "COMMIT;"
+    )
+    if control != "ready":
+        raise AssertionError(
+            f"READ COMMITTED control retrieval did not remain ready: {control!r}"
+        )
+
+
+
 def test_state_invalidation(
     project_id: str, resource_id: str, work_id: str, dependency_id: str,
     session_id: str, pack_id: str, grant_decision_id: str,
@@ -1163,6 +1234,9 @@ def main() -> None:
     pack_id = test_compilation_cache_and_provenance(
         project_id, resource_id, work_id, dependency_id, session_id
     )
+    test_context_rpc_isolation_contract(
+        project_id, resource_id, work_id, session_id, pack_id
+    )
     test_snapshot_write_serialization(
         project_id, resource_id, work_id, dependency_id,
         pack_id, session_id
@@ -1190,7 +1264,7 @@ def main() -> None:
     )
     test_budget_truncation(project_2, resource_2, work_2, session_2)
     test_denied_project_is_rejected_before_retrieval(resource_2, session_2)
-    print("PASS Stage 4B Context Compiler: authorization-before-retrieval, source/decision/dependency/grant invalidation, cache binding, provenance and budget truncation")
+    print("PASS Stage 4B Context Compiler: READ COMMITTED isolation enforcement, authorization-before-retrieval, source/decision/dependency/grant invalidation, cache binding, provenance and budget truncation")
 
 
 if __name__ == "__main__":

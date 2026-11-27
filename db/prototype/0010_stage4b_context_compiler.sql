@@ -654,6 +654,17 @@ DECLARE
   v_decision_scope_type text;
   v_decision_scope_key text;
 BEGIN
+  -- This MVCC gate depends on a fresh READ COMMITTED snapshot after advisory-lock
+  -- waits. A REPEATABLE READ/SERIALIZABLE transaction could retain a pre-revocation
+  -- snapshot even after the writer commits and releases the Resource/Project lock.
+  -- Reject unsupported isolation before taking locks or reading authorization rows.
+  IF current_setting('transaction_isolation') IS DISTINCT FROM 'read committed' THEN
+    RAISE EXCEPTION
+      'Context authorization requires READ COMMITTED isolation; current transaction uses %',
+      current_setting('transaction_isolation')
+      USING ERRCODE = '25001';
+  END IF;
+
   -- Resource locks precede project locks for a globally consistent order.
   -- A resource-scoped decision or physical Resource update may affect every
   -- project linked to this Resource; association inserts/removals participate
