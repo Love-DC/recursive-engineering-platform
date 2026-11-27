@@ -138,7 +138,7 @@ def start_pass(
 
 
 def reserve(
-    project_id: str, resource_id: str, pass_id: str, session_id: str, *,
+    project_id: str, resource_id: str, stable_id: str, pass_id: str, session_id: str, *,
     call_key: str | None = None, cursor: dict | None = None,
     estimated_tokens: int = 100, estimated_cost: int = 100,
 ) -> dict:
@@ -358,7 +358,7 @@ def test_budgets_and_resume(project_id: str, resource_id: str, stable_id: str) -
     session4 = str(uuid4())
     p4 = start_pass(project_id,resource_id,stable_id,session_id=session4,budget=limits(max_elapsed_ms=1000))
     time.sleep(1.1)
-    time_stop = reserve(project_id,resource_id,p4["pass_id"],session4,cursor={"page":1})
+    time_stop = reserve(project_id,resource_id,stable_id,p4["pass_id"],session4,cursor={"page":1})
     if time_stop.get("reason")!="elapsed_budget":
         raise AssertionError(f"Elapsed-time budget did not stop the next tool call: {time_stop}")
 
@@ -451,32 +451,47 @@ def test_read_only_owner_gate_and_queue(project_id: str, resource_id: str, stabl
     assert_status(denied,"queue_not_empty","ready queue preflight")
 
 
-def test_revocation_before_payload_read(project_id: str, resource_id: str, stable_id: str) -> None:
+def test_revocation_before_payload_read() -> None:
+    project_id,resource_id,stable_id = setup_scope(access_mode="write")
     session = str(uuid4())
     p = start_pass(project_id,resource_id,stable_id,session_id=session)
-    result = json_result(
-        "UPDATE aep.project_resources SET status='revoked',revoked_at=clock_timestamp(),"
-        "grant_version=grant_version+1 "
-        f"WHERE project_id={lit(project_id)}::uuid AND resource_id={lit(resource_id)}::uuid "
-        "RETURNING status;"
-    ) if False else None
+    call_key = "reserved-before-revocation"
+    source_ref = f"github://github.com/{stable_id}/issues/99"
+    reserved = json_result(
+        "SELECT aep.reserve_discovery_call("
+        f"{lit(project_id)}::uuid,{lit(resource_id)}::uuid,{lit(p['pass_id'])}::uuid,"
+        f"{lit(session)}::uuid,{lit(call_key)},'github_fetch_issue','issue',"
+        f"{lit(source_ref)},'{"{"}"page":1{"}"}'::jsonb,100,100);"
+    )
+    assert_status(reserved,"reserved","pre-revocation read reservation")
+    before = scalar(
+        "SELECT count(*) FROM aep.evidence WHERE project_id="
+        f"{lit(project_id)}::uuid AND evidence_type='discovery_observation';"
+    )
     psql(
         "UPDATE aep.project_resources SET status='revoked',revoked_at=clock_timestamp(),"
         "grant_version=grant_version+1 "
         f"WHERE project_id={lit(project_id)}::uuid AND resource_id={lit(resource_id)}::uuid;"
     )
-    denied = json_result(
+    denied = json_result(complete_sql(
+        project_id,resource_id,p["pass_id"],session,call_key,source_ref,
+        cursor_after={"page":2},resume_cursor={"page":2},
+        candidate=candidate("revoked:must-not-register","Must not register"),
+    ))
+    assert_status(denied,"denied","revoked complete call before payload read")
+    state = json_result(
         "SELECT aep.get_discovery_state("
         f"{lit(project_id)}::uuid,{lit(resource_id)}::uuid,10);"
     )
-    assert_status(denied,"denied","revoked discovery state read")
-    count = scalar(
+    assert_status(state,"denied","revoked discovery state read")
+    after = scalar(
         "SELECT count(*) FROM aep.evidence WHERE project_id="
         f"{lit(project_id)}::uuid AND evidence_type='discovery_observation';"
     )
-    # The pass was created before revocation, but no new tool call or source evidence was committed.
-    if count != "0":
-        raise AssertionError(f"Unauthorized discovery returned {count} Evidence rows after grant revocation")
+    if before != after:
+        raise AssertionError(
+            f"Revoked resource scope persisted a source payload: Evidence count {before} -> {after}"
+        )
 
 
 def main() -> None:
@@ -487,7 +502,7 @@ def main() -> None:
     test_budgets_and_resume(project_id,resource_id,stable_id)
     test_depth_and_fanout(project_id,resource_id,stable_id)
     test_read_only_owner_gate_and_queue(project_id,resource_id,stable_id)
-    test_revocation_before_payload_read(project_id,resource_id,stable_id)
+    test_revocation_before_payload_read()
     print(
         "PASS T19: empty-queue discovery, reproducible Evidence, concurrent canonical "
         "register-or-link, and no duplicate Work; "
