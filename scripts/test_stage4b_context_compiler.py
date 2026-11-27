@@ -7,6 +7,7 @@ import json
 import os
 import re
 import subprocess
+import time
 from pathlib import Path
 from uuid import uuid4
 
@@ -97,7 +98,7 @@ def test_runtime_access_boundary() -> None:
 
 
 def test_authorization_locks(project_id: str, resource_id: str, grant_decision_id: str) -> None:
-    """A successful authorization holds grant/decision rows until retrieval commits."""
+    """A shared project advisory lock serializes grant/decision writers through commit."""
     cmd = [
         "psql", "-X", "-q", "-A", "-t", "-v", "ON_ERROR_STOP=1",
         "-h", HOST, "-p", PORT, "-U", USER, "-d", DATABASE,
@@ -162,6 +163,118 @@ def test_authorization_locks(project_id: str, resource_id: str, grant_decision_i
         f"WHERE decision_id={lit(grant_decision_id)}::uuid;"
     ) != "approved":
         raise AssertionError("OwnerDecision revoke unexpectedly committed during authorized retrieval")
+
+
+def test_authorization_lock_order(
+    project_id: str, resource_id: str, grant_decision_id: str,
+) -> None:
+    """Prove tuple-lock-first writers cannot deadlock Context authorization readers."""
+    cmd = [
+        "psql", "-X", "-q", "-A", "-t", "-v", "ON_ERROR_STOP=1",
+        "-h", HOST, "-p", PORT, "-U", USER, "-d", DATABASE,
+    ]
+
+    def run_case(label: str, writer_sql: str) -> None:
+        reader_env = os.environ.copy()
+        reader_env["PGPASSWORD"] = PASSWORD
+        reader = subprocess.Popen(
+            cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, bufsize=1, env=reader_env,
+        )
+        assert reader.stdin is not None and reader.stdout is not None
+        reader.stdin.write(
+            "BEGIN;\\n"
+            "DO $ BEGIN PERFORM pg_advisory_xact_lock_shared(hashtextextended("
+            f"'aep.context-project:' || {lit(project_id)}::text,0)); END $;\\n"
+            "SELECT 'reader_ready';\\n"
+        )
+        reader.stdin.flush()
+        ready = reader.stdout.readline().strip()
+        if ready != "reader_ready":
+            reader.kill()
+            reader.wait()
+            raise AssertionError(f"{label}: reader failed to acquire shared project lock: {ready!r}")
+
+        writer_app = "stage4b_lock_order_" + str(uuid4()).replace("-", "")
+        writer_env = os.environ.copy()
+        writer_env["PGPASSWORD"] = PASSWORD
+        writer_env["PGAPPNAME"] = writer_app
+        writer = subprocess.Popen(
+            cmd + ["-c", writer_sql],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=writer_env,
+        )
+
+        try:
+            deadline = time.monotonic() + 8
+            waiting = False
+            while time.monotonic() < deadline:
+                if writer.poll() is not None:
+                    out, err = writer.communicate()
+                    raise AssertionError(
+                        f"{label}: writer completed instead of waiting for the reader lock; "
+                        f"exit={writer.returncode}, stdout={out}, stderr={err}"
+                    )
+                wait_count = scalar(
+                    "SELECT count(*) FROM pg_stat_activity "
+                    f"WHERE application_name={lit(writer_app)} "
+                    "AND wait_event_type='Lock' AND wait_event='advisory';"
+                )
+                if wait_count == "1":
+                    waiting = True
+                    break
+                time.sleep(0.05)
+            if not waiting:
+                writer.kill()
+                writer.wait()
+                raise AssertionError(f"{label}: writer never reached the expected advisory-lock wait")
+
+            # The writer now owns its target tuple and is blocked in the row
+            # trigger waiting for the exclusive project advisory lock. Calling
+            # authorization here used to request FOR SHARE on that tuple and
+            # form the exact advisory/tuple lock cycle from the independent review.
+            reader.stdin.write(
+                "SELECT aep.context_project_resource_allowed("
+                f"{lit(project_id)}::uuid,{lit(resource_id)}::uuid);\\n"
+                "COMMIT;\\n"
+            )
+            reader.stdin.flush()
+            reader.stdin.close()
+            reader.wait(timeout=6)
+            reader_output = reader.stdout.read()
+            reader_error = reader.stderr.read() if reader.stderr else ""
+            if reader.returncode != 0 or "t" not in reader_output.split():
+                raise AssertionError(
+                    f"{label}: authorization reader deadlocked or denied unexpectedly; "
+                    f"exit={reader.returncode}, stdout={reader_output}, stderr={reader_error}"
+                )
+
+            writer.wait(timeout=6)
+            writer_output = writer.stdout.read() if writer.stdout else ""
+            writer_error = writer.stderr.read() if writer.stderr else ""
+            if writer.returncode != 0:
+                raise AssertionError(
+                    f"{label}: queued writer failed after reader commit; "
+                    f"exit={writer.returncode}, stdout={writer_output}, stderr={writer_error}"
+                )
+        finally:
+            if reader.poll() is None:
+                reader.kill()
+                reader.wait()
+            if writer.poll() is None:
+                writer.kill()
+                writer.wait()
+
+    run_case(
+        "ProjectResource tuple-lock ordering",
+        "UPDATE aep.project_resources SET grant_version=grant_version "
+        f"WHERE project_id={lit(project_id)}::uuid "
+        f"AND resource_id={lit(resource_id)}::uuid;",
+    )
+    run_case(
+        "OwnerDecision tuple-lock ordering",
+        "UPDATE aep.owner_decisions SET statement=statement "
+        f"WHERE decision_id={lit(grant_decision_id)}::uuid;",
+    )
 
 
 def create_work(project_id: str, title: str, *, key: str | None = None) -> str:
@@ -656,6 +769,7 @@ def main() -> None:
     test_runtime_access_boundary()
     project_id, resource_id, work_id, dependency_id, graph_id, grant_decision_id, _ = setup_fixture()
     test_authorization_locks(project_id, resource_id, grant_decision_id)
+    test_authorization_lock_order(project_id, resource_id, grant_decision_id)
     session_id = str(uuid4())
     pack_id = test_compilation_cache_and_provenance(
         project_id, resource_id, work_id, dependency_id, session_id
