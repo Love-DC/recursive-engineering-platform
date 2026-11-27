@@ -89,4 +89,4 @@ This is not a production authorization system. The ProjectResource row is a trus
 
 ### Stage 4B candidate verification
 
-Exact PR HEAD `11136edb42fea4cbc4f431845f211e6038ecd29a` passed GitHub Actions [Run #45918619591](https://github.com/Love-DC/recursive-engineering-platform/actions/runs/45918619591): Repository contract job `140243707885` and PostgreSQL 17.12 integration job `140243707465` both succeeded. Independent review is pending. This evidence applies only to the disposable prototype, not a production deployment or authenticated production identity boundary.
+Stage 4B exact-head CI passed: Repository contract and PostgreSQL 17.12 integration jobs both succeeded. The current branch-tip SHA and run identifiers are maintained in [PR #70](https://github.com/Love-DC/recursive-engineering-platform/pull/70). Independent review is pending. This evidence applies only to the disposable prototype, not a production deployment or authenticated production identity boundary.
