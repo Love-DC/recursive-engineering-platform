@@ -1572,11 +1572,143 @@ BEGIN
 END
 $function$;
 
+-- A batch can add/remove dependency edges across several projects. Per-edge
+-- trigger locks are insufficient: two batches can visit the same projects in
+-- reverse order and each retain a different project lock. Pre-lock all affected
+-- Work tuples, then the complete sorted project union, before the first edge write.
+ALTER FUNCTION aep.mutate_dependencies(uuid,text,jsonb)
+  RENAME TO mutate_dependencies_unordered;
+
+ALTER FUNCTION aep.mutate_dependencies_unordered(uuid,text,jsonb) OWNER TO aep_owner;
+REVOKE ALL ON FUNCTION aep.mutate_dependencies_unordered(uuid,text,jsonb)
+  FROM PUBLIC,aep_runtime;
+
+CREATE FUNCTION aep.mutate_dependencies(
+  p_graph_id uuid,
+  p_request_key text,
+  p_operations jsonb
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, aep
+AS $function$
+DECLARE
+  v_graph_status text;
+  v_saved aep.dependency_graph_operations%ROWTYPE;
+  v_item jsonb;
+  v_source_id uuid;
+  v_target_id uuid;
+  v_work_ids uuid[];
+  v_project_ids uuid[];
+  v_work_id uuid;
+  v_project_id uuid;
+BEGIN
+  IF p_graph_id IS NULL OR p_request_key IS NULL
+     OR length(btrim(p_request_key)) NOT BETWEEN 1 AND 160
+     OR p_operations IS NULL OR jsonb_typeof(p_operations) <> 'array'
+     OR jsonb_array_length(p_operations) NOT BETWEEN 1 AND 100 THEN
+    RAISE EXCEPTION 'graph_id, request key and 1..100 dependency operations are required'
+      USING ERRCODE = '22023';
+  END IF;
+
+  SELECT graph_row.status INTO v_graph_status
+  FROM aep.dependency_graphs AS graph_row
+  WHERE graph_row.graph_id = p_graph_id
+  FOR UPDATE;
+
+  IF NOT FOUND OR v_graph_status <> 'active' THEN
+    RAISE EXCEPTION 'Dependency graph is not active'
+      USING ERRCODE = '55000';
+  END IF;
+
+  SELECT operation_row.* INTO v_saved
+  FROM aep.dependency_graph_operations AS operation_row
+  WHERE operation_row.graph_id = p_graph_id
+    AND operation_row.request_key = p_request_key
+  FOR UPDATE;
+
+  IF FOUND THEN
+    IF v_saved.request_payload IS DISTINCT FROM p_operations THEN
+      RAISE EXCEPTION 'Dependency operation request key was reused with a different payload'
+        USING ERRCODE = '22000';
+    END IF;
+    RETURN v_saved.result_payload;
+  END IF;
+
+  FOR v_item IN
+    SELECT element.value FROM jsonb_array_elements(p_operations) AS element(value)
+  LOOP
+    IF jsonb_typeof(v_item) <> 'object' THEN
+      RAISE EXCEPTION 'Every dependency operation must be a JSON object'
+        USING ERRCODE = '22023';
+    END IF;
+    v_source_id := NULLIF(v_item->>'source_work_id','')::uuid;
+    v_target_id := NULLIF(v_item->>'target_work_id','')::uuid;
+    IF v_item->>'op' NOT IN ('add','remove')
+       OR v_source_id IS NULL OR v_target_id IS NULL
+       OR v_source_id = v_target_id THEN
+      RAISE EXCEPTION 'Dependency operation requires op=add/remove and distinct source/target Work IDs'
+        USING ERRCODE = '22023';
+    END IF;
+  END LOOP;
+
+  SELECT COALESCE(array_agg(work_id ORDER BY work_id), ARRAY[]::uuid[])
+  INTO v_work_ids
+  FROM (
+    SELECT DISTINCT endpoint.work_id
+    FROM jsonb_array_elements(p_operations) AS element(value)
+    CROSS JOIN LATERAL (
+      VALUES ((element.value->>'source_work_id')::uuid),
+             ((element.value->>'target_work_id')::uuid)
+    ) AS endpoint(work_id)
+  ) AS endpoints;
+
+  FOR v_work_id IN
+    SELECT unnest(v_work_ids) AS work_id
+    ORDER BY work_id
+  LOOP
+    PERFORM 1
+    FROM aep.works AS work_row
+    WHERE work_row.work_id = v_work_id
+    FOR UPDATE;
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'Dependency operation references an unknown Work'
+        USING ERRCODE = '23503';
+    END IF;
+  END LOOP;
+
+  SELECT COALESCE(array_agg(DISTINCT work_row.project_id ORDER BY work_row.project_id),
+                  ARRAY[]::uuid[])
+  INTO v_project_ids
+  FROM aep.works AS work_row
+  WHERE work_row.work_id = ANY(v_work_ids);
+
+  FOR v_project_id IN
+    SELECT unnest(v_project_ids) AS project_id
+    ORDER BY project_id
+  LOOP
+    PERFORM pg_advisory_xact_lock(
+      hashtextextended('aep.context-project:' || v_project_id::text, 0)
+    );
+  END LOOP;
+
+  RETURN aep.mutate_dependencies_unordered(p_graph_id,p_request_key,p_operations);
+END
+$function$;
+
+ALTER FUNCTION aep.mutate_dependencies(uuid,text,jsonb) OWNER TO aep_owner;
+REVOKE ALL ON FUNCTION aep.mutate_dependencies(uuid,text,jsonb) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION aep.mutate_dependencies(uuid,text,jsonb) TO aep_runtime;
+
 ALTER TABLE aep.context_source_heads OWNER TO aep_owner;
 ALTER TABLE aep.context_evidence_sizes OWNER TO aep_owner;
 ALTER TABLE aep.context_packs OWNER TO aep_owner;
 ALTER TABLE aep.context_retrieval_events OWNER TO aep_owner;
 ALTER FUNCTION aep.reject_context_record_mutation() OWNER TO aep_owner;
+ALTER FUNCTION aep.lock_context_resource(uuid[],boolean) OWNER TO aep_owner;
+REVOKE ALL ON FUNCTION aep.lock_context_resource(uuid[],boolean)
+  FROM PUBLIC,aep_runtime;
 ALTER FUNCTION aep.lock_context_project_write() OWNER TO aep_owner;
 ALTER FUNCTION aep.capture_context_evidence_sizes() OWNER TO aep_owner;
 ALTER FUNCTION aep.context_project_resource_allowed(uuid,uuid,boolean) OWNER TO aep_owner;
