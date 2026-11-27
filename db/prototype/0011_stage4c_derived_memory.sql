@@ -324,6 +324,9 @@ BEGIN
   -- Authorization precedes the first Work/Evidence/Decision/Memory read.
   -- The shared gate also enforces the READ COMMITTED transaction contract.
   IF NOT aep.context_project_resource_allowed(p_project_id,p_resource_id) THEN
+    INSERT INTO aep.context_retrieval_events(
+      operation,outcome,project_id,work_id,resource_id,session_id,source_count,source_bytes
+    ) VALUES ('compile','denied',p_project_id,p_work_id,p_resource_id,p_session_id,0,0);
     RETURN jsonb_build_object('status','denied','reason','project_scope_unavailable','source_count',0);
   END IF;
 
