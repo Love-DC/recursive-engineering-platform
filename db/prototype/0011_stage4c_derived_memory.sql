@@ -33,7 +33,8 @@ CREATE TABLE aep.derived_memories (
   invalidation_reason text,
   created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   FOREIGN KEY (project_id,work_id) REFERENCES aep.works(project_id,work_id),
-  FOREIGN KEY (project_id,resource_id) REFERENCES aep.project_resources(project_id,resource_id),
+  -- Do not FK the disposable projection to the mutable grant row: a grant may be
+  -- deleted, and its former provenance must remain available as invalidated history.
   CHECK (
     (status = 'ready' AND invalidated_at IS NULL AND invalidation_reason IS NULL)
     OR (status = 'invalidated' AND invalidated_at IS NOT NULL
@@ -594,6 +595,25 @@ CREATE TRIGGER derived_memory_resource_invalidation
 AFTER UPDATE ON aep.resources
 FOR EACH ROW EXECUTE FUNCTION aep.invalidate_derived_memory_on_resource_change();
 
+CREATE FUNCTION aep.invalidate_derived_memory_on_project_change()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, aep
+AS $function$
+BEGIN
+  UPDATE aep.derived_memories
+  SET status='invalidated',invalidated_at=clock_timestamp(),
+      invalidation_reason='project_source_state_changed'
+  WHERE project_id=NEW.project_id AND status='ready';
+  RETURN NEW;
+END
+$function$;
+
+CREATE TRIGGER derived_memory_project_invalidation
+AFTER UPDATE ON aep.projects
+FOR EACH ROW EXECUTE FUNCTION aep.invalidate_derived_memory_on_project_change();
+
 -- The Context Pack snapshot fingerprint now includes valid derived memory.
 CREATE FUNCTION aep.build_context_pack_snapshot(
   p_project_id uuid,p_work_id uuid,p_resource_id uuid,p_resource_ref text
@@ -644,6 +664,7 @@ ALTER FUNCTION aep.invalidate_derived_memory_on_dependency_change() OWNER TO aep
 ALTER FUNCTION aep.invalidate_derived_memory_on_work_change() OWNER TO aep_owner;
 ALTER FUNCTION aep.invalidate_derived_memory_on_grant_change() OWNER TO aep_owner;
 ALTER FUNCTION aep.invalidate_derived_memory_on_resource_change() OWNER TO aep_owner;
+ALTER FUNCTION aep.invalidate_derived_memory_on_project_change() OWNER TO aep_owner;
 ALTER FUNCTION aep.build_context_pack_snapshot(uuid,uuid,uuid,text) OWNER TO aep_owner;
 ALTER FUNCTION aep.rebuild_derived_memory(uuid,uuid,uuid,text,uuid,text,text,text) OWNER TO aep_owner;
 
@@ -662,6 +683,7 @@ REVOKE ALL ON FUNCTION aep.invalidate_derived_memory_on_dependency_change() FROM
 REVOKE ALL ON FUNCTION aep.invalidate_derived_memory_on_work_change() FROM PUBLIC,aep_runtime;
 REVOKE ALL ON FUNCTION aep.invalidate_derived_memory_on_grant_change() FROM PUBLIC,aep_runtime;
 REVOKE ALL ON FUNCTION aep.invalidate_derived_memory_on_resource_change() FROM PUBLIC,aep_runtime;
+REVOKE ALL ON FUNCTION aep.invalidate_derived_memory_on_project_change() FROM PUBLIC,aep_runtime;
 REVOKE ALL ON FUNCTION aep.build_context_pack_snapshot_stage4b(uuid,uuid,uuid,text)
   FROM PUBLIC,aep_runtime;
 REVOKE ALL ON FUNCTION aep.build_context_pack_snapshot(uuid,uuid,uuid,text)
