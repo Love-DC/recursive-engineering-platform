@@ -57,9 +57,9 @@ LANGUAGE plpgsql
 SET search_path = pg_catalog, aep
 AS $function$
 BEGIN
-  IF (to_jsonb(NEW) - 'status' - 'invalidated_at' - 'invalidation_reason')
+  IF (to_jsonb(NEW) - 'status' - 'invalidated_at' - 'invalidation_reason' - 'search_vector')
        IS DISTINCT FROM
-     (to_jsonb(OLD) - 'status' - 'invalidated_at' - 'invalidation_reason') THEN
+     (to_jsonb(OLD) - 'status' - 'invalidated_at' - 'invalidation_reason' - 'search_vector') THEN
     RAISE EXCEPTION 'Derived memory content and provenance are immutable'
       USING ERRCODE = '55000';
   END IF;
@@ -513,6 +513,79 @@ BEGIN
 END
 $function$;
 
+
+CREATE FUNCTION aep.invalidate_derived_memory_on_work_change()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, aep
+AS $function$
+BEGIN
+  UPDATE aep.derived_memories
+  SET status='invalidated',invalidated_at=clock_timestamp(),
+      invalidation_reason='work_or_dependency_state_changed'
+  WHERE project_id=NEW.project_id
+    AND status='ready'
+    AND (work_id=NEW.work_id OR source_work_ids @> ARRAY[NEW.work_id]);
+  RETURN NEW;
+END
+$function$;
+
+CREATE TRIGGER derived_memory_work_invalidation
+AFTER UPDATE ON aep.works
+FOR EACH ROW EXECUTE FUNCTION aep.invalidate_derived_memory_on_work_change();
+
+CREATE FUNCTION aep.invalidate_derived_memory_on_grant_change()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, aep
+AS $function$
+DECLARE
+  v_project_id uuid;
+  v_resource_id uuid;
+BEGIN
+  IF TG_OP='DELETE' THEN
+    v_project_id := OLD.project_id;
+    v_resource_id := OLD.resource_id;
+  ELSE
+    v_project_id := NEW.project_id;
+    v_resource_id := NEW.resource_id;
+  END IF;
+
+  UPDATE aep.derived_memories
+  SET status='invalidated',invalidated_at=clock_timestamp(),
+      invalidation_reason='project_resource_grant_changed'
+  WHERE project_id=v_project_id AND resource_id=v_resource_id AND status='ready';
+
+  IF TG_OP='DELETE' THEN RETURN OLD; END IF;
+  RETURN NEW;
+END
+$function$;
+
+CREATE TRIGGER derived_memory_grant_invalidation
+AFTER UPDATE OR DELETE ON aep.project_resources
+FOR EACH ROW EXECUTE FUNCTION aep.invalidate_derived_memory_on_grant_change();
+
+CREATE FUNCTION aep.invalidate_derived_memory_on_resource_change()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, aep
+AS $function$
+BEGIN
+  UPDATE aep.derived_memories
+  SET status='invalidated',invalidated_at=clock_timestamp(),
+      invalidation_reason='repository_resource_changed'
+  WHERE resource_id=NEW.resource_id AND status='ready';
+  RETURN NEW;
+END
+$function$;
+
+CREATE TRIGGER derived_memory_resource_invalidation
+AFTER UPDATE ON aep.resources
+FOR EACH ROW EXECUTE FUNCTION aep.invalidate_derived_memory_on_resource_change();
+
 -- The Context Pack snapshot fingerprint now includes valid derived memory.
 CREATE FUNCTION aep.build_context_pack_snapshot(
   p_project_id uuid,p_work_id uuid,p_resource_id uuid,p_resource_ref text
@@ -560,6 +633,9 @@ ALTER FUNCTION aep.invalidate_derived_memory_on_evidence_insert() OWNER TO aep_o
 ALTER FUNCTION aep.invalidate_derived_memory_on_decision_change() OWNER TO aep_owner;
 ALTER FUNCTION aep.invalidate_derived_memory_on_source_change() OWNER TO aep_owner;
 ALTER FUNCTION aep.invalidate_derived_memory_on_dependency_change() OWNER TO aep_owner;
+ALTER FUNCTION aep.invalidate_derived_memory_on_work_change() OWNER TO aep_owner;
+ALTER FUNCTION aep.invalidate_derived_memory_on_grant_change() OWNER TO aep_owner;
+ALTER FUNCTION aep.invalidate_derived_memory_on_resource_change() OWNER TO aep_owner;
 ALTER FUNCTION aep.build_context_pack_snapshot(uuid,uuid,uuid,text) OWNER TO aep_owner;
 ALTER FUNCTION aep.rebuild_derived_memory(uuid,uuid,uuid,text,uuid,text,text,text) OWNER TO aep_owner;
 
@@ -575,6 +651,9 @@ REVOKE ALL ON FUNCTION aep.invalidate_derived_memory_on_evidence_insert() FROM P
 REVOKE ALL ON FUNCTION aep.invalidate_derived_memory_on_decision_change() FROM PUBLIC,aep_runtime;
 REVOKE ALL ON FUNCTION aep.invalidate_derived_memory_on_source_change() FROM PUBLIC,aep_runtime;
 REVOKE ALL ON FUNCTION aep.invalidate_derived_memory_on_dependency_change() FROM PUBLIC,aep_runtime;
+REVOKE ALL ON FUNCTION aep.invalidate_derived_memory_on_work_change() FROM PUBLIC,aep_runtime;
+REVOKE ALL ON FUNCTION aep.invalidate_derived_memory_on_grant_change() FROM PUBLIC,aep_runtime;
+REVOKE ALL ON FUNCTION aep.invalidate_derived_memory_on_resource_change() FROM PUBLIC,aep_runtime;
 REVOKE ALL ON FUNCTION aep.build_context_pack_snapshot_stage4b(uuid,uuid,uuid,text)
   FROM PUBLIC,aep_runtime;
 REVOKE ALL ON FUNCTION aep.build_context_pack_snapshot(uuid,uuid,uuid,text)
@@ -586,8 +665,6 @@ REVOKE ALL ON FUNCTION aep.compile_context_pack(uuid,uuid,uuid,text,uuid,integer
 
 GRANT EXECUTE ON FUNCTION aep.rebuild_derived_memory(uuid,uuid,uuid,text,uuid,text,text,text)
   TO aep_runtime;
-
-COMMIT;
 
 CREATE OR REPLACE FUNCTION aep.compile_context_pack(
   p_project_id uuid,
@@ -795,3 +872,5 @@ BEGIN
   );
 END
 $function$;
+
+COMMIT;
