@@ -91,3 +91,5 @@ jobs:
         run: python scripts/test_stage4_recovery.py
       - name: Run Stage 4B authorized Context Compiler and Context Pack tests
         run: python scripts/test_stage4b_context_compiler.py
+      - name: Run Stage 4C deterministic evidence-derived memory tests
+        run: python scripts/test_stage4c_derived_memory.py
