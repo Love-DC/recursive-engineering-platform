@@ -403,6 +403,31 @@ def test_evidence_work_grant_resource_invalidation(
     assert_invalidated(memory_id, "repository_resource_changed")
     memory = rebuild(project_id, work_id, resource_id, session_id)
     assert_status(memory, "ready", "rebuild after physical Resource change")
+    memory_id = memory["derived_memory_id"]
+
+    # Project state is a source input, and its changes invalidate the projection.
+    psql(
+        "UPDATE aep.projects SET name=name || ' changed' "
+        f"WHERE project_id={lit(project_id)}::uuid;"
+    )
+    assert_invalidated(memory_id, "project_source_state_changed")
+    memory = rebuild(project_id, work_id, resource_id, session_id)
+    assert_status(memory, "ready", "rebuild after project state change")
+    memory_id = memory["derived_memory_id"]
+
+    # Revoking by deleting the ProjectResource row must not cascade-delete the
+    # source-pinned projection; it remains as invalidated provenance history.
+    psql(
+        "DELETE FROM aep.project_resources "
+        f"WHERE project_id={lit(project_id)}::uuid AND resource_id={lit(resource_id)}::uuid;"
+    )
+    assert_invalidated(memory_id, "project_resource_grant_changed")
+    retained = scalar(
+        "SELECT count(*)::text FROM aep.derived_memories "
+        f"WHERE derived_memory_id={lit(memory_id)}::uuid AND status='invalidated';"
+    )
+    if retained != "1":
+        raise AssertionError("Grant deletion removed derived-memory provenance history")
 
     # Deleted or changed Evidence rows are rejected, never repaired in place.
     evidence_id = scalar(
