@@ -87,6 +87,6 @@ Main contains migrations 0001–0012, merged and verified as the Stage 4A–4D d
 - No production coordination write path, production authorization boundary, pilot, task import, or legacy RAE cutover is established. No existing Supabase project or legacy RAE database may be changed as part of prototype work.
 - There is no always-on LLM runtime. Continue A0 active-session-triggered recovery, discovery, and execution only; GitHub Actions is CI/validation, not a ChatGPT session trigger or background model consumer.
 - The Context Compiler is a logical capability by default, not a separately deployed service. Authorization must precede retrieval; Context Packs and derived memory are disposable, source-pinned projections, never authorities.
-- Keep D4 PROVISIONAL and D9/D13/D15/D16 UNVERIFIED / OPEN. Do not infer pilot, production, approval-policy, or cutover authorization from merged code or green CI.
+- Keep D4 PROVISIONAL and D9/D15/D16 UNVERIFIED / OPEN. D13 is OWNER-APPROVED: the first heterogeneous pilot is `Love-DC/Hexa-Game-Kernel`, selected by the Owner on 2026-11-27; Project/Resource registration remains pending AEP activation. Do not infer production, approval-policy, or cutover authorization from merged code or green CI.
 
 Do not advance a stage merely because its documentation, schema, or tables exist. Use the acceptance criteria and exact-SHA evidence required by the roadmap. Deployment, pilot selection, and legacy cutover remain separately gated by the Decision Register.
