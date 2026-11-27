@@ -360,6 +360,33 @@ BEGIN
     'limits',v_limits,'resume_from_pass_id',p_resume_from_pass_id
   );
 
+  SELECT * INTO v_existing FROM aep.discovery_passes
+  WHERE project_id=p_project_id AND resource_id=p_resource_id AND request_key=p_request_key
+  FOR UPDATE;
+  IF FOUND THEN
+    IF v_existing.request_payload IS DISTINCT FROM v_request_payload THEN
+      RAISE EXCEPTION 'Discovery request key reused with a different payload'
+        USING ERRCODE = '22000';
+    END IF;
+    RETURN jsonb_build_object(
+      'status',v_existing.status,'pass_id',v_existing.pass_id,
+      'resume_cursor',v_existing.resume_cursor,'tool_calls_used',v_existing.tool_calls_used,
+      'tokens_used',v_existing.tokens_used,'cost_used_micros',v_existing.cost_used_micros,
+      'idempotent_replay',true
+    );
+  END IF;
+
+  SELECT * INTO v_existing FROM aep.discovery_passes
+  WHERE project_id=p_project_id AND resource_id=p_resource_id AND status='running'
+  ORDER BY started_at DESC LIMIT 1
+  FOR UPDATE;
+  IF FOUND THEN
+    RETURN jsonb_build_object(
+      'status','active_pass_exists','pass_id',v_existing.pass_id,
+      'resume_cursor',v_existing.resume_cursor
+    );
+  END IF;
+
   INSERT INTO aep.discovery_passes(
     project_id,resource_id,session_id,request_key,request_payload,
     source_list,current_cursor,watermark,resume_cursor,
@@ -927,6 +954,92 @@ BEGIN
 END
 $function$;
 
+-- Fresh sessions can recover recent pass IDs, budgets, cursors and candidate
+-- dispositions without direct table reads. Content stays in Evidence and is
+-- never included in this state summary.
+CREATE FUNCTION aep.get_discovery_state(
+  p_project_id uuid,
+  p_resource_id uuid,
+  p_limit integer DEFAULT 10
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, aep
+AS $function$
+DECLARE
+  v_passes jsonb;
+  v_observations jsonb;
+  v_ready_count bigint;
+BEGIN
+  IF NOT aep.context_project_resource_allowed(p_project_id,p_resource_id,false) THEN
+    RETURN jsonb_build_object('status','denied','reason','project_scope_unavailable');
+  END IF;
+  IF p_limit IS NULL OR p_limit NOT BETWEEN 1 AND 20 THEN
+    RAISE EXCEPTION 'Discovery state limit must be between 1 and 20' USING ERRCODE = '22023';
+  END IF;
+
+  SELECT count(*) INTO v_ready_count FROM aep.works
+  WHERE project_id=p_project_id AND status='ready';
+
+  SELECT COALESCE(jsonb_agg(item.value ORDER BY item.started_at DESC),'[]'::jsonb)
+  INTO v_passes
+  FROM (
+    SELECT jsonb_build_object(
+      'pass_id',pass_id,'request_key',request_key,'status',status,
+      'stop_reason',stop_reason,'resume_from_pass_id',resume_from_pass_id,
+      'source_list',source_list,'current_cursor',current_cursor,
+      'watermark',watermark,'resume_cursor',resume_cursor,
+      'limits',jsonb_build_object(
+        'max_depth',max_depth,'max_fanout',max_fanout,
+        'max_tool_calls',max_tool_calls,'max_elapsed_ms',max_elapsed_ms,
+        'max_tokens',max_tokens,'max_cost_micros',max_cost_micros,
+        'max_no_progress',max_no_progress
+      ),
+      'usage',jsonb_build_object(
+        'tool_calls_used',tool_calls_used,'tokens_used',tokens_used,
+        'tokens_reserved',tokens_reserved,'cost_used_micros',cost_used_micros,
+        'cost_reserved_micros',cost_reserved_micros,'no_progress_count',no_progress_count
+      ),
+      'started_at',started_at,'stopped_at',stopped_at,'completed_at',completed_at
+    ) AS value,started_at
+    FROM aep.discovery_passes
+    WHERE project_id=p_project_id AND resource_id=p_resource_id
+    ORDER BY started_at DESC LIMIT p_limit
+  ) AS item;
+
+  SELECT COALESCE(jsonb_agg(item.value ORDER BY item.reserved_at DESC),'[]'::jsonb)
+  INTO v_observations
+  FROM (
+    SELECT jsonb_build_object(
+      'observation_id',observation_id,'pass_id',pass_id,'call_key',call_key,
+      'tool_name',tool_name,'source_kind',source_kind,'source_ref',source_ref,
+      'source_revision',source_revision,'content_sha256',content_sha256,
+      'evidence_id',evidence_id,'status',status,'decision',decision,
+      'decision_reason',decision_reason,'candidate_fingerprint',candidate_fingerprint,
+      'work_id',work_id,'parent_work_id',parent_work_id,'depth',depth,
+      'cursor_before',cursor_before,'cursor_after',cursor_after,
+      'resume_cursor',resume_cursor,'actual_tokens',actual_tokens,
+      'actual_cost_micros',actual_cost_micros,'reserved_at',reserved_at,
+      'completed_at',completed_at
+    ) AS value,reserved_at
+    FROM aep.discovery_observations
+    WHERE project_id=p_project_id AND resource_id=p_resource_id
+      AND pass_id IN (
+        SELECT pass_id FROM aep.discovery_passes
+        WHERE project_id=p_project_id AND resource_id=p_resource_id
+        ORDER BY started_at DESC LIMIT p_limit
+      )
+    ORDER BY reserved_at DESC LIMIT 100
+  ) AS item;
+
+  RETURN jsonb_build_object(
+    'status','ready','ready_work_count',v_ready_count,
+    'passes',v_passes,'observations',v_observations
+  );
+END
+$function$;
+
 CREATE FUNCTION aep.finish_discovery_pass(
   p_project_id uuid,p_resource_id uuid,p_pass_id uuid,p_session_id uuid
 )
@@ -1031,6 +1144,7 @@ ALTER FUNCTION aep.reserve_discovery_call(uuid,uuid,uuid,uuid,text,text,text,tex
   OWNER TO aep_owner;
 ALTER FUNCTION aep.complete_discovery_call(uuid,uuid,uuid,uuid,text,text,text,jsonb,jsonb,integer,bigint,jsonb,jsonb,jsonb)
   OWNER TO aep_owner;
+ALTER FUNCTION aep.get_discovery_state(uuid,uuid,integer) OWNER TO aep_owner;
 ALTER FUNCTION aep.finish_discovery_pass(uuid,uuid,uuid,uuid) OWNER TO aep_owner;
 ALTER FUNCTION aep.yield_discovery_pass(uuid,uuid,uuid,uuid,jsonb) OWNER TO aep_owner;
 
@@ -1042,6 +1156,7 @@ REVOKE ALL ON FUNCTION aep.reserve_discovery_call(uuid,uuid,uuid,uuid,text,text,
   FROM PUBLIC;
 REVOKE ALL ON FUNCTION aep.complete_discovery_call(uuid,uuid,uuid,uuid,text,text,text,jsonb,jsonb,integer,bigint,jsonb,jsonb,jsonb)
   FROM PUBLIC;
+REVOKE ALL ON FUNCTION aep.get_discovery_state(uuid,uuid,integer) FROM PUBLIC;
 REVOKE ALL ON FUNCTION aep.finish_discovery_pass(uuid,uuid,uuid,uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION aep.yield_discovery_pass(uuid,uuid,uuid,uuid,jsonb) FROM PUBLIC;
 
@@ -1051,6 +1166,7 @@ GRANT EXECUTE ON FUNCTION aep.reserve_discovery_call(uuid,uuid,uuid,uuid,text,te
   TO aep_runtime;
 GRANT EXECUTE ON FUNCTION aep.complete_discovery_call(uuid,uuid,uuid,uuid,text,text,text,jsonb,jsonb,integer,bigint,jsonb,jsonb,jsonb)
   TO aep_runtime;
+GRANT EXECUTE ON FUNCTION aep.get_discovery_state(uuid,uuid,integer) TO aep_runtime;
 GRANT EXECUTE ON FUNCTION aep.finish_discovery_pass(uuid,uuid,uuid,uuid) TO aep_runtime;
 GRANT EXECUTE ON FUNCTION aep.yield_discovery_pass(uuid,uuid,uuid,uuid,jsonb) TO aep_runtime;
 
