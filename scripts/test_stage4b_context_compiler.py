@@ -277,6 +277,218 @@ def test_authorization_lock_order(
     )
 
 
+
+def _start_psql(
+    application_name: str, sql: str, *, keep_stdin_open: bool = False,
+) -> subprocess.Popen[str]:
+    cmd = [
+        "psql", "-X", "-q", "-A", "-t", "-v", "ON_ERROR_STOP=1",
+        "-h", HOST, "-p", PORT, "-U", USER, "-d", DATABASE,
+    ]
+    env = os.environ.copy()
+    env["PGPASSWORD"] = PASSWORD
+    env["PGAPPNAME"] = application_name
+    proc = subprocess.Popen(
+        cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, bufsize=1, env=env,
+    )
+    assert proc.stdin is not None
+    proc.stdin.write(sql)
+    proc.stdin.flush()
+    if not keep_stdin_open:
+        proc.stdin.close()
+    return proc
+
+
+def _wait_for_advisory_wait(application_name: str, timeout: float = 8.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if scalar(
+            "SELECT count(*) FROM pg_stat_activity "
+            f"WHERE application_name={lit(application_name)} "
+            "AND wait_event_type='Lock' AND wait_event='advisory';"
+        ) == "1":
+            return
+        time.sleep(0.05)
+    raise AssertionError(f"{application_name} did not wait on an advisory lock")
+
+
+def _new_resource() -> str:
+    resource_id = str(uuid4())
+    stable_id = "stage4b-resource-race-" + str(uuid4())
+    psql(
+        "INSERT INTO aep.resources(resource_id,provider,host,resource_type,"
+        "stable_resource_id,canonical_key,display_name) VALUES("
+        f"{lit(resource_id)}::uuid,'github','github.com','repository',"
+        f"{lit(stable_id)},{lit('repository:'+stable_id)},'Resource race fixture');"
+    )
+    return resource_id
+
+
+def _new_resource_decision(resource_id: str) -> str:
+    return scalar(
+        "INSERT INTO aep.owner_decisions("
+        "scope_type,scope_key,decision_key,statement,decision_version,status,"
+        "approval_source_kind,approval_source_ref,approver_principal,"
+        "approval_provenance,approved_at"
+        ") VALUES("
+        f"'resource',{lit(resource_id)},'stage4b-resource-grant',"
+        "'Temporary resource-scoped grant',1,'approved','direct_owner_message',"
+        "'test://owner/stage4b-resource-race','test-owner',"
+        "jsonb_build_object('direct_owner_confirmation',true),clock_timestamp()"
+        ") RETURNING decision_id;"
+    )
+
+
+def test_resource_scope_serialization(existing_project_id: str) -> None:
+    """Resource decision revocation and Resource updates serialize with new links."""
+    resource_one = _new_resource()
+    decision_one = _new_resource_decision(resource_one)
+    psql(
+        "INSERT INTO aep.project_resources("
+        "project_id,resource_id,access_mode,status,grant_version,grant_decision_id"
+        ") VALUES("
+        f"{lit(existing_project_id)}::uuid,{lit(resource_one)}::uuid,"
+        f"'write','active',1,{lit(decision_one)}::uuid);"
+    )
+    project_two = scalar(
+        "INSERT INTO aep.projects(project_key,name) "
+        "VALUES('stage4b-association-' || substr(gen_random_uuid()::text,1,8),"
+        "'Stage 4B resource association race') RETURNING project_id;"
+    )
+    work_two = create_work(project_two, "Resource association race Work")
+    session_two = str(uuid4())
+    revoker_app = "stage4b_revoke_" + str(uuid4()).replace("-", "")
+    assoc_app = "stage4b_assoc_" + str(uuid4()).replace("-", "")
+    reader_app = "stage4b_assoc_reader_" + str(uuid4()).replace("-", "")
+
+    revoker = _start_psql(
+        revoker_app,
+        "BEGIN;\n"
+        "UPDATE aep.owner_decisions SET status='revoked' "
+        f"WHERE decision_id={lit(decision_one)}::uuid;\n"
+        "SELECT 'resource_decision_revoker_holds_lock';\n"
+        "SELECT pg_sleep(2);\n"
+        "COMMIT;\n",
+    )
+    assert revoker.stdout is not None
+    if revoker.stdout.readline().strip() != "resource_decision_revoker_holds_lock":
+        revoker.kill()
+        revoker.wait()
+        raise AssertionError("resource-scoped OwnerDecision update did not acquire its Resource lock")
+
+    association = _start_psql(
+        assoc_app,
+        "BEGIN;\n"
+        "INSERT INTO aep.project_resources("
+        "project_id,resource_id,access_mode,status,grant_version,grant_decision_id"
+        ") VALUES("
+        f"{lit(project_two)}::uuid,{lit(resource_one)}::uuid,'write','active',1,"
+        f"{lit(decision_one)}::uuid);\n"
+        "SELECT 'resource_association_inserted';\nCOMMIT;\n",
+    )
+    reader = None
+    try:
+        _wait_for_advisory_wait(assoc_app)
+        reader = _start_psql(
+            reader_app,
+            "SELECT aep.compile_context_pack("
+            f"{lit(project_two)}::uuid,{lit(work_two)}::uuid,{lit(resource_one)}::uuid,"
+            f"'refs/heads/main',{lit(session_two)}::uuid,8192,"
+            "'context-compiler/1','evidence-json/1','default/1')->>'status';\n",
+        )
+        _wait_for_advisory_wait(reader_app)
+        revoker.wait(timeout=8)
+        if revoker.returncode != 0:
+            raise RuntimeError(revoker.stderr.read() if revoker.stderr else "revoker failed")
+        association.wait(timeout=8)
+        assoc_out = association.stdout.read() if association.stdout else ""
+        assoc_err = association.stderr.read() if association.stderr else ""
+        if association.returncode != 0 or "resource_association_inserted" not in assoc_out:
+            raise AssertionError(f"ProjectResource insert failed after revocation: {assoc_out} {assoc_err}")
+        reader.wait(timeout=8)
+        read_out = reader.stdout.read() if reader.stdout else ""
+        read_err = reader.stderr.read() if reader.stderr else ""
+        if reader.returncode != 0 or "denied" not in read_out.split():
+            raise AssertionError(
+                f"Context compile authorized after resource-scoped OwnerDecision revocation: "
+                f"{read_out} {read_err}"
+            )
+    finally:
+        for proc in (revoker, association, reader):
+            if proc is not None and proc.poll() is None:
+                proc.kill()
+                proc.wait()
+
+    resource_two = _new_resource()
+    psql(
+        "INSERT INTO aep.project_resources("
+        "project_id,resource_id,access_mode,status,grant_version,grant_decision_id"
+        ") VALUES("
+        f"{lit(existing_project_id)}::uuid,{lit(resource_two)}::uuid,'read','active',1,NULL);"
+    )
+    project_three = scalar(
+        "INSERT INTO aep.projects(project_key,name) "
+        "VALUES('stage4b-resource-update-' || substr(gen_random_uuid()::text,1,8),"
+        "'Stage 4B Resource state race') RETURNING project_id;"
+    )
+    work_three = create_work(project_three, "Resource update race Work")
+    session_three = str(uuid4())
+    resource_app = "stage4b_archive_" + str(uuid4()).replace("-", "")
+    assoc_app_two = "stage4b_archive_assoc_" + str(uuid4()).replace("-", "")
+    reader_app_two = "stage4b_archive_reader_" + str(uuid4()).replace("-", "")
+    archiver = _start_psql(
+        resource_app,
+        "BEGIN;\n"
+        f"UPDATE aep.resources SET status='archived' WHERE resource_id={lit(resource_two)}::uuid;\n"
+        "SELECT 'resource_archiver_holds_lock';\n"
+        "SELECT pg_sleep(2);\nCOMMIT;\n",
+    )
+    assert archiver.stdout is not None
+    if archiver.stdout.readline().strip() != "resource_archiver_holds_lock":
+        archiver.kill()
+        archiver.wait()
+        raise AssertionError("Resource archive did not acquire its Resource lock")
+    association_two = _start_psql(
+        assoc_app_two,
+        "BEGIN;\n"
+        "INSERT INTO aep.project_resources("
+        "project_id,resource_id,access_mode,status,grant_version,grant_decision_id"
+        ") VALUES("
+        f"{lit(project_three)}::uuid,{lit(resource_two)}::uuid,'read','active',1,NULL);\n"
+        "SELECT 'archived_resource_link_inserted';\nCOMMIT;\n",
+    )
+    reader_two = None
+    try:
+        _wait_for_advisory_wait(assoc_app_two)
+        reader_two = _start_psql(
+            reader_app_two,
+            "SELECT aep.compile_context_pack("
+            f"{lit(project_three)}::uuid,{lit(work_three)}::uuid,{lit(resource_two)}::uuid,"
+            f"'refs/heads/main',{lit(session_three)}::uuid,8192,"
+            "'context-compiler/1','evidence-json/1','default/1')->>'status';\n",
+        )
+        _wait_for_advisory_wait(reader_app_two)
+        archiver.wait(timeout=8)
+        if archiver.returncode != 0:
+            raise RuntimeError(archiver.stderr.read() if archiver.stderr else "archiver failed")
+        association_two.wait(timeout=8)
+        assoc_out = association_two.stdout.read() if association_two.stdout else ""
+        assoc_err = association_two.stderr.read() if association_two.stderr else ""
+        if association_two.returncode != 0 or "archived_resource_link_inserted" not in assoc_out:
+            raise AssertionError(f"ProjectResource insert failed after Resource archive: {assoc_out} {assoc_err}")
+        reader_two.wait(timeout=8)
+        read_out = reader_two.stdout.read() if reader_two.stdout else ""
+        read_err = reader_two.stderr.read() if reader_two.stderr else ""
+        if reader_two.returncode != 0 or "denied" not in read_out.split():
+            raise AssertionError(f"Context compile authorized archived Resource: {read_out} {read_err}")
+    finally:
+        for proc in (archiver, association_two, reader_two):
+            if proc is not None and proc.poll() is None:
+                proc.kill()
+                proc.wait()
+
+
 def create_work(project_id: str, title: str, *, key: str | None = None) -> str:
     session_id = str(uuid4())
     work_id = scalar(
@@ -770,6 +982,7 @@ def main() -> None:
     project_id, resource_id, work_id, dependency_id, graph_id, grant_decision_id, _ = setup_fixture()
     test_authorization_locks(project_id, resource_id, grant_decision_id)
     test_authorization_lock_order(project_id, resource_id, grant_decision_id)
+    test_resource_scope_serialization(project_id)
     session_id = str(uuid4())
     pack_id = test_compilation_cache_and_provenance(
         project_id, resource_id, work_id, dependency_id, session_id
