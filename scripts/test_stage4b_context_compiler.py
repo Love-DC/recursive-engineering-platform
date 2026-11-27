@@ -1098,14 +1098,21 @@ def test_budget_truncation(
     for evidence in payload["source_evidence"]:
         if evidence["payload_bytes"] > 16384 or evidence["provenance_bytes"] > 8192:
             raise AssertionError("oversized Evidence payload/provenance reached the Context Pack")
-        if evidence["source_ref_bytes"] != len(evidence["source_ref"].encode("utf-8")):
-            raise AssertionError("source_ref UTF-8 byte accounting is incorrect")
-        if evidence["source_revision_bytes"] != len(
-            (evidence["source_revision"] or "").encode("utf-8")
-        ):
-            raise AssertionError("source_revision UTF-8 byte accounting is incorrect")
-        if evidence["evidence_type_bytes"] != len(evidence["evidence_type"].encode("utf-8")):
-            raise AssertionError("evidence_type UTF-8 byte accounting is incorrect")
+        serialized_source_ref = len(
+            json.dumps(evidence["source_ref"], ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        )
+        serialized_source_revision = len(
+            json.dumps(evidence["source_revision"], ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        )
+        serialized_evidence_type = len(
+            json.dumps(evidence["evidence_type"], ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        )
+        if evidence["source_ref_bytes"] != serialized_source_ref:
+            raise AssertionError("source_ref serialized UTF-8 byte accounting is incorrect")
+        if evidence["source_revision_bytes"] != serialized_source_revision:
+            raise AssertionError("source_revision serialized UTF-8 byte accounting is incorrect")
+        if evidence["evidence_type_bytes"] != serialized_evidence_type:
+            raise AssertionError("evidence_type serialized UTF-8 byte accounting is incorrect")
         if (evidence["source_ref_bytes"] > 8192
                 or evidence["source_revision_bytes"] > 8192
                 or evidence["evidence_type_bytes"] > 400):
