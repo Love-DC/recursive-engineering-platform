@@ -239,45 +239,6 @@ CREATE TRIGGER derived_memory_dependency_invalidation
 AFTER INSERT OR UPDATE OR DELETE ON aep.work_relations
 FOR EACH ROW EXECUTE FUNCTION aep.invalidate_derived_memory_on_dependency_change();
 
-CREATE FUNCTION aep.build_context_pack_snapshot(
-  p_project_id uuid,p_work_id uuid,p_resource_id uuid,p_resource_ref text
-)
-RETURNS jsonb
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = pg_catalog, aep
-AS $function$
-DECLARE
-  v_snapshot jsonb;
-  v_memory jsonb;
-BEGIN
-  v_snapshot := aep.build_context_pack_snapshot_stage4b(
-    p_project_id,p_work_id,p_resource_id,p_resource_ref
-  );
-
-  SELECT COALESCE(jsonb_agg(jsonb_build_object(
-    'derived_memory_id',memory_row.derived_memory_id,
-    'source_snapshot_sha256',memory_row.source_snapshot_sha256,
-    'source_count',cardinality(memory_row.source_evidence_ids),
-    'observed_at',memory_row.observed_at,
-    'valid_at',memory_row.valid_at,
-    'extractor_version',memory_row.extractor_version,
-    'model_version',memory_row.model_version,
-    'schema_version',memory_row.schema_version,
-    'memory_content',memory_row.memory_content
-  ) ORDER BY memory_row.observed_at DESC,memory_row.derived_memory_id),'[]'::jsonb)
-  INTO v_memory
-  FROM aep.derived_memories AS memory_row
-  WHERE memory_row.project_id=p_project_id
-    AND memory_row.work_id=p_work_id
-    AND memory_row.resource_id=p_resource_id
-    AND memory_row.resource_ref=p_resource_ref
-    AND memory_row.status='ready';
-
-  RETURN v_snapshot || jsonb_build_object('derived_memory',v_memory);
-END
-$function$;
-
 CREATE FUNCTION aep.rebuild_derived_memory(
   p_project_id uuid,
   p_work_id uuid,
