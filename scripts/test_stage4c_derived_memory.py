@@ -415,19 +415,21 @@ def test_evidence_work_grant_resource_invalidation(
     assert_status(memory, "ready", "rebuild after project state change")
     memory_id = memory["derived_memory_id"]
 
-    # Revoking by deleting the ProjectResource row must not cascade-delete the
-    # source-pinned projection; it remains as invalidated provenance history.
+    # Revoke the existing grant using the supported status transition. The
+    # immutable projection remains as invalidated provenance, but the rebuild
+    # API must deny access before reading the Evidence or derived-memory rows.
     psql(
-        "DELETE FROM aep.project_resources "
+        "UPDATE aep.project_resources SET status='revoked',"
+        "revoked_at=clock_timestamp(),grant_version=grant_version+1 "
         f"WHERE project_id={lit(project_id)}::uuid AND resource_id={lit(resource_id)}::uuid;"
     )
     assert_invalidated(memory_id, "project_resource_grant_changed")
-    retained = scalar(
-        "SELECT count(*)::text FROM aep.derived_memories "
-        f"WHERE derived_memory_id={lit(memory_id)}::uuid AND status='invalidated';"
-    )
-    if retained != "1":
-        raise AssertionError("Grant deletion removed derived-memory provenance history")
+    revoked_result = rebuild(project_id, work_id, resource_id, session_id)
+    assert_status(revoked_result, "denied", "rebuild after project grant revocation")
+    if revoked_result.get("source_count") != 0:
+        raise AssertionError("Revoked project returned source rows during rebuild")
+    if memory_row(memory_id)["status"] != "invalidated":
+        raise AssertionError("Grant revocation removed the derived-memory provenance history")
 
     # Deleted or changed Evidence rows are rejected, never repaired in place.
     evidence_id = scalar(
