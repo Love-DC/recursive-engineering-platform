@@ -1059,8 +1059,9 @@ def test_budget_truncation(
         "'text',repeat('LARGE_SOURCE_CONTENT_' || n::text,900)) AS payload "
         "FROM generate_series(1,25) AS series(n) "
         "UNION ALL "
-        "SELECT 'artifact://stage4b/small/' || n::text,"
-        "'small-' || n::text,"
+        "SELECT repeat('界',1500) || '/' || n::text,"
+        "CASE WHEN n <= 10 THEN repeat('OVERSIZED_REVISION_',600) "
+        "ELSE 'small-' || n::text END,"
         "jsonb_build_object('kind','source_observation','text','small fact ' || n::text) "
         "FROM generate_series(1,140) AS series(n)"
         ") INSERT INTO aep.evidence("
@@ -1087,15 +1088,43 @@ def test_budget_truncation(
     if "LARGE_SOURCE_CONTENT_" in json.dumps(payload):
         raise AssertionError("truncated source content leaked into the returned Context Pack")
     selection = payload["source_evidence_selection"]
-    if selection["total_count"] != 165 or selection["oversized_count"] != 25:
+    if selection["total_count"] != 165 or selection["oversized_count"] != 35:
         raise AssertionError(f"bounded selection summary is incorrect: {selection}")
     if selection["candidate_count"] > 128 or selection["selected_count"] > 128:
         raise AssertionError("Evidence metadata candidate/selection count exceeded 128")
     if selection["selected_materialized_bytes"] > 262144:
-        raise AssertionError("Evidence payload/provenance materialization exceeded 256 KiB")
+        raise AssertionError("complete Evidence materialization exceeded 256 KiB")
+    materialized_sum = 0
     for evidence in payload["source_evidence"]:
         if evidence["payload_bytes"] > 16384 or evidence["provenance_bytes"] > 8192:
-            raise AssertionError("oversized Evidence reached the Context Pack payload")
+            raise AssertionError("oversized Evidence payload/provenance reached the Context Pack")
+        if evidence["source_ref_bytes"] != len(evidence["source_ref"].encode("utf-8")):
+            raise AssertionError("source_ref UTF-8 byte accounting is incorrect")
+        if evidence["source_revision_bytes"] != len(
+            (evidence["source_revision"] or "").encode("utf-8")
+        ):
+            raise AssertionError("source_revision UTF-8 byte accounting is incorrect")
+        if evidence["evidence_type_bytes"] != len(evidence["evidence_type"].encode("utf-8")):
+            raise AssertionError("evidence_type UTF-8 byte accounting is incorrect")
+        if (evidence["source_ref_bytes"] > 8192
+                or evidence["source_revision_bytes"] > 8192
+                or evidence["evidence_type_bytes"] > 400):
+            raise AssertionError("oversized Evidence metadata reached the Context Pack")
+        expected_bytes = (
+            evidence["payload_bytes"] + evidence["provenance_bytes"]
+            + evidence["source_ref_bytes"] + evidence["source_revision_bytes"]
+            + evidence["evidence_type_bytes"] + 512
+        )
+        if evidence["materialized_bytes"] != expected_bytes:
+            raise AssertionError("Evidence materialization omitted source metadata")
+        materialized_sum += expected_bytes
+    if materialized_sum != selection["selected_materialized_bytes"]:
+        raise AssertionError("selected Evidence summary does not match the selected rows")
+    if any(
+        "OVERSIZED_REVISION_" in (evidence["source_revision"] or "")
+        for evidence in payload["source_evidence"]
+    ):
+        raise AssertionError("oversized source_revision was materialized into the Context Pack")
     if payload["source_evidence_count"] != 165:
         raise AssertionError("Context Pack did not preserve total Evidence count");
 
