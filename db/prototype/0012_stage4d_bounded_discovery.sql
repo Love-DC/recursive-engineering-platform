@@ -547,6 +547,9 @@ BEGIN
       RAISE EXCEPTION 'Discovery call key reused with a different reservation payload'
         USING ERRCODE = '22000';
     END IF;
+    IF v_existing.status='reserved' AND v_pass.status<>'running' THEN
+      RETURN jsonb_build_object('status','stopped','reason','pass_unavailable');
+    END IF;
     RETURN jsonb_build_object(
       'status',v_existing.status,'observation_id',v_existing.observation_id,
       'idempotent_replay',true,'decision',v_existing.decision,
