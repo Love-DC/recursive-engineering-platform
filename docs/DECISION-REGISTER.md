@@ -34,7 +34,7 @@ Primary source: [Current Design Snapshot v2.0](https://github.com/Love-DC/recurs
 | ID | Decision | Status | Gate |
 |---|---|---|---|
 | D9 | Explicit acceptance of shared Owner principal / credentials and residual stale external side-effect risk | UNVERIFIED / OPEN | Before relying on this risk model for production-critical delivery |
-| D13 | Exact first heterogeneous pilot repositories/projects | UNVERIFIED / OPEN | Before pilot registration or project-specific adapter work |
+| D13 | Exact first heterogeneous pilot repositories/projects | OWNER-APPROVED — first pilot: `Love-DC/Hexa-Game-Kernel` (Owner direction, 2026-11-27) | Resolved for the first pilot; additional pilots require separate selection |
 | D15 | Production coordination write entry: current Supabase MCP surface versus a controlled operation endpoint | UNVERIFIED / OPEN | Before production writes / production cutover |
 | D16 | Whether any pilot requires native GitHub required approval rather than same-principal COMMENTED process review | UNVERIFIED / OPEN | Before enabling merge for a repo with such branch rules |
 
