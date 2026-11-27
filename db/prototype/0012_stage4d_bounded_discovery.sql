@@ -552,6 +552,18 @@ BEGIN
       'resume_cursor',v_pass.current_cursor);
   END IF;
 
+  IF v_pass.no_progress_count >= v_pass.max_no_progress THEN
+    UPDATE aep.discovery_passes SET status='stopped',stop_reason='no_progress',
+      stopped_at=clock_timestamp(),resume_cursor=current_cursor,updated_at=clock_timestamp()
+    WHERE pass_id=p_pass_id;
+    INSERT INTO aep.discovery_pass_events(pass_id,project_id,resource_id,session_id,event_type,event_payload)
+    VALUES(p_pass_id,p_project_id,p_resource_id,p_session_id,'no_progress_stopped',
+      jsonb_build_object('reason','no_progress','no_progress_count',v_pass.no_progress_count,
+        'resume_cursor',v_pass.current_cursor));
+    RETURN jsonb_build_object('status','stopped','reason','no_progress',
+      'resume_cursor',v_pass.current_cursor,'no_progress_count',v_pass.no_progress_count);
+  END IF;
+
   v_elapsed := floor(extract(epoch FROM (clock_timestamp()-v_pass.started_at))*1000)::bigint;
   IF v_elapsed >= v_pass.max_elapsed_ms THEN
     UPDATE aep.discovery_passes SET status='stopped',stop_reason='elapsed_budget',
