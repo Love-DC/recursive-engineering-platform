@@ -1,6 +1,6 @@
-# Work Registry, coordination model, and Stage 2A–Stage 4A protocol prototypes
+# Work Registry, coordination model, and Stage 2A–Stage 4B protocol prototypes
 
-This directory contains disposable PostgreSQL experiments for the Stage 1A/1B data model and the Stage 2A, Stage 2B, Stage 3, and Stage 4A transactional/recovery protocol prototypes.
+This directory contains disposable PostgreSQL experiments for the Stage 1A/1B data model and the Stage 2A, Stage 2B, Stage 3, Stage 4A recovery, and Stage 4B Context Compiler/Context Pack protocol prototypes.
 
 ## Implemented
 
@@ -68,3 +68,20 @@ This is a **trusted single-Owner test prototype**, not a production Supabase mig
 - Role creation assumes a disposable PostgreSQL administrator connection. It is not intended to run unchanged against an existing Supabase project.
 - The database fence does not revoke shared GitHub/MCP credentials or prevent every stale external side effect.
 - Do not deploy or expose these prototype functions as production write APIs. D4 remains PROVISIONAL; D9, D13, D15, and D16 remain UNVERIFIED / OPEN.
+
+
+## Stage 4B — authorized Context Compiler and Context Packs
+
+Migration `0010_stage4b_context_compiler.sql` adds a logical compiler API without introducing a separate service:
+
+- `record_context_source_revision` records an adapter-observed repository ref pin (commit SHA, tree SHA and content SHA-256) against the append-only Evidence Ledger and advances a monotonic per-project/resource/ref source version only when the observed pin or provenance changes.
+- `compile_context_pack` checks an active ProjectResource grant before accessing Work, dependency, decision or Evidence content. It builds an immutable JSON projection with physical repository/ref identity, source pin, Work and dependency state, decision ID/version/status/provenance, evidence refs and hashes, compiler/indexer/config versions and token budget.
+- `get_context_pack` resolves only pack routing IDs before the grant check; after the grant is confirmed it reloads source state and validates the cache fingerprint and compiler/indexer/config/budget dimensions before its first read of cached payload bytes. A changed source/decision/dependency/grant/compiler/indexer/config/budget returns `stale` with no payload; revoked access returns `denied` with zero source rows/bytes in the audit.
+- Context Packs and cache rows are immutable disposable projections. Raw Evidence remains authoritative. The cache key binds the complete source snapshot and all compiler dimensions. ProjectResource grant version, Work version, dependency graph/target versions and decision version/status are inside the fingerprint.
+- The budget limiter uses a deterministic ceiling of UTF-8 JSON bytes divided by four as an explicit estimate. It is deliberately not represented as an exact model tokenizer. Evidence entries are truncated deterministically and the response reports included/omitted counts.
+- Explicit cross-project dependency retrieval fails closed. No vector database/index is introduced; `indexer_version` records which evidence projection strategy generated the pack.
+- Run `python scripts/test_stage4b_context_compiler.py` against a disposable PostgreSQL 17.12 database to exercise this slice.
+
+### Stage 4B prototype limitations
+
+This is not a production authorization system. The ProjectResource row is a trusted-single-Owner scope gate; neither `session_id` nor the caller-supplied `project_id` authenticates a principal. The repository observation (commit/tree/content hash plus adapter provenance) is supplied by the calling GitHub session adapter; PostgreSQL does not independently authenticate the adapter or fetch GitHub content. Cross-project Context grants, production Supabase deployment/RLS review, native identity binding, a network retrieval adapter and model-specific tokenization remain outside this prototype. Do not deploy these functions as a production API.

@@ -62,8 +62,8 @@ def setup_database() -> None:
         if not match:
             raise SystemExit(f"Invalid migration filename: {path.name}")
         versions.append(int(match.group(1)))
-    if versions != list(range(1, 10)):
-        raise SystemExit(f"Expected contiguous migrations 0001..0009, got {versions}")
+    if versions != list(range(1, 11)):
+        raise SystemExit(f"Expected contiguous migrations 0001..0010, got {versions}")
 
     psql(f"DROP DATABASE IF EXISTS {DATABASE} WITH (FORCE);", db="postgres")
     psql(f"CREATE DATABASE {DATABASE};", db="postgres")
@@ -71,8 +71,9 @@ def setup_database() -> None:
     if not version.startswith("17.12"):
         raise AssertionError(f"Stage 4A requires PostgreSQL 17.12; got {version}")
     for path in paths:
-        psql(file=path)
-    print("PASS T26: clean migrations 0001..0009 on PostgreSQL 17.12")
+        if int(path.name[:4]) <= 9:
+            psql(file=path)
+    print("PASS Stage 4A baseline: clean migrations 0001..0009 on PostgreSQL 17.12 (0010 is tested by Stage 4B)")
 
 
 def setup_project(manifest: dict) -> tuple[str, str, str, str, str, str]:

@@ -20,7 +20,7 @@ Authoritative behavioral definitions are in [Snapshot v2.0](https://github.com/L
 | T14 | Same-principal process review is distinct from native approval | 3 | PASS — `COMMENTED` Process Review and observed `APPROVED` Native Approval are separate evidence kinds. The adapter explicitly states that a separate independently authenticated principal is unavailable under the connected single GitHub identity; this does not satisfy branch rules requiring a different approver. Immutable candidate, independent review, merge, and CI evidence: see [Stage 3 delivery evidence](#stage-3-delivery-evidence). Prototype test only; no production GitHub gateway. |
 | T15 | Exact-SHA CI, merge SHA validation and deployment remain distinct | 3 | PASS — PR HEAD CI must match the PR HEAD; HEAD changes invalidate earlier CI/review/approval; merge SHA is separately recorded; post-merge CI and Owner Acceptance bind to merge SHA. Deployment is explicitly unsupported and cannot be fabricated as evidence. Immutable candidate, independent review, merge, and CI evidence: see [Stage 3 delivery evidence](#stage-3-delivery-evidence). Prototype test only; no production GitHub gateway. |
 | T16 | OwnerDecision requires direct provenance and scope/version | 1B–2 | PARTIAL — approved status requires explicit direct-Owner provenance fields; actual Owner event verification/supersede enforcement is not implemented |
-| T17 | Project authorization and cross-project retrieval isolation | 1B–2 | PARTIAL — composite FKs block mismatched Work/project links; authenticated read/search authorization is not implemented |
+| T17 | Project authorization and cross-project retrieval isolation | 1B–2, 4B | PARTIAL — Stage 4B candidate adds a ProjectResource-gated Context Compiler and adversarial tests for rejecting denied project/resource requests before Work/Evidence retrieval with zero source rows/bytes in denial traces; exact-head CI is pending; session_id and caller project_id are not proof. This is a trusted-single-Owner prototype scope check, not authenticated caller/session principal binding; explicit cross-project Context sharing is fail-closed and production read/search authorization remains unimplemented |
 | T18 | GRANT/RLS/SECURITY DEFINER/search_path/bypass roles audited | 1A–2 | PARTIAL — prototype tests verify selected role/function properties, non-bypass object owner, forced RLS, no direct runtime table read, and append-only triggers; production project authorization and Supabase role audit are not implemented |
 | T19 | Empty queue and source evidence create one canonical Work | 4 | NOT IMPLEMENTED |
 | T20 | Discovery/decomposition stops at budgets and detects no progress | 4 | NOT IMPLEMENTED |
@@ -29,7 +29,7 @@ Authoritative behavioral definitions are in [Snapshot v2.0](https://github.com/L
 | T23 | Parent completion aggregates required/optional children | 2B | PASS — active required children gate parent success, optional children do not; Stage 2B test passed on exact source-head Run #85 and post-merge Run #86. |
 | T24 | Event/handover/ack replay is idempotent and stale versions rejected | 2–4 | PARTIAL — Work/evidence/receipt event append-only constraints tested; versioned transition and replay protocol not implemented |
 | T25 | Derived memory/index rebuilds from source evidence | 4 | NOT IMPLEMENTED |
-| T26 | Clean database migration chain has unique ordered versions | 1A–4A | PASS — Stage 2B verified clean migrations 0001–0006; Stage 3 verified 0001–0008; Stage 4A final reviewed candidate Run #131 verified the full ordered 0001–0009 chain on clean PostgreSQL 17.12; the candidate passed independent review and was merged as `1ab52e5d46d9ceb4c3a3e580e538b2865b044095`. Exact-merge post-merge CI is Run #132. |
+| T26 | Clean database migration chain has unique ordered versions | 1A–4B | PARTIAL — Stage 4A final reviewed candidate Run #131 and exact-merge Run #132 verified the clean ordered 0001–0009 chain on PostgreSQL 17.12. The Stage 4B candidate adds migration 0010 and checks sequence continuity; its clean 0001–0010 execution is pending exact-head CI. |
 
 ## Stage 4A session recovery evidence — independently reviewed and merged prototype
 
@@ -89,3 +89,11 @@ Authoritative behavioral definitions are in [Snapshot v2.0](https://github.com/L
 - T16–T18 remain PARTIAL for their explicitly stated production/Owner-event and authenticated authorization limitations. Passing prototype RPC/RLS checks must not be represented as a production security audit.
 
 Schema-only partial results remain distinct from end-to-end passes. Successful CI is evidence for the exact tested prototype behavior, not automatic Owner acceptance of deferred decisions or production readiness.
+
+
+## Stage 4B Context Compiler candidate evidence (verification pending)
+
+- Additive prototype migration: `db/prototype/0010_stage4b_context_compiler.sql`.
+- Test runner: `scripts/test_stage4b_context_compiler.py`; the Stage 4A runner continues to apply only 0001–0009 so its baseline remains independently reproducible.
+- The Stage 4B suite is designed to cover denied source-record/compile/fetch calls before Work/Evidence payload reads, zero-byte/zero-row denial traces, caller-supplied session/project routing values, project/resource/Work binding, dependency and decision provenance/version, source commit/tree/content hash/version changes, grant version changes and revocation, compiler/indexer/config/budget cache invalidation, immutable cached payload hash, and evidence truncation to an explicit budget.
+- Status remains candidate until exact-head CI and independent review have completed. T17 and T18 remain PARTIAL for authenticated production principal binding and a complete production security audit. No production Supabase deployment or authenticated GitHub source observer is claimed.
