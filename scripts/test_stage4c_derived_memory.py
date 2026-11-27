@@ -309,15 +309,18 @@ def test_source_and_decision_invalidation(
     old_pack = stage4b.compile_pack(project_id, work_id, resource_id, session_id)
     assert_pack_contains_memory(old_pack, memory_id)
 
-    # Repository source pin advances only when commit/tree/content/provenance changes.
+    # A repository revision changes the source snapshot and invalidates memory.
     changed_source = stage4b.record_source(
         project_id, work_id, resource_id, session_id,
         "4" * 40, "5" * 40, "6" * 64,
     )
     assert_status(changed_source, "recorded", "repository source pin change")
     assert_invalidated(memory_id, "source_evidence_appended")
-    stale = stage4b.fetch_pack(old_pack["pack_id"], session_id)
-    assert_status(stale, "stale", "Context Pack after source change")
+    assert_status(
+        stage4b.fetch_pack(old_pack["pack_id"], session_id),
+        "stale",
+        "Context Pack after source change",
+    )
 
     empty_pack = stage4b.compile_pack(project_id, work_id, resource_id, session_id)
     assert_status(empty_pack, "ready", "Pack before rebuilding source memory")
@@ -333,7 +336,9 @@ def test_source_and_decision_invalidation(
     pack_after_rebuild = stage4b.compile_pack(project_id, work_id, resource_id, session_id)
     assert_pack_contains_memory(pack_after_rebuild, new_memory_id)
 
-    # OwnerDecision changes invalidate the derived projection and the Pack.
+    # OwnerDecision remains authoritative in the Context Pack, not in derived
+    # memory. A decision change stales the Pack but does not rewrite or
+    # invalidate an Evidence-only projection.
     context_decision_id = scalar(
         "SELECT decision_id::text FROM aep.owner_decisions "
         f"WHERE scope_type='work' AND scope_key={lit(work_id)} "
@@ -343,24 +348,23 @@ def test_source_and_decision_invalidation(
         "UPDATE aep.owner_decisions SET status='rejected' "
         f"WHERE decision_id={lit(context_decision_id)}::uuid;"
     )
-    assert_invalidated(new_memory_id, "owner_decision_changed")
+    if memory_row(new_memory_id)["status"] != "ready":
+        raise AssertionError("OwnerDecision update incorrectly changed Evidence-derived memory")
     assert_status(
         stage4b.fetch_pack(pack_after_rebuild["pack_id"], session_id),
         "stale",
         "Context Pack after OwnerDecision change",
     )
-    decision_rebuild = rebuild(project_id, work_id, resource_id, session_id)
-    assert_status(decision_rebuild, "ready", "rebuild after OwnerDecision change")
-    if decision_rebuild["derived_memory_id"] == new_memory_id:
-        raise AssertionError("Changed OwnerDecision reused the invalidated derived-memory row")
-    return decision_rebuild["derived_memory_id"]
+    fresh_pack = stage4b.compile_pack(project_id, work_id, resource_id, session_id)
+    assert_pack_contains_memory(fresh_pack, new_memory_id)
+    return new_memory_id
 
 
 def test_evidence_work_grant_resource_invalidation(
     project_id: str, resource_id: str, work_id: str,
     session_id: str, memory_id: str,
 ) -> None:
-    # Appending source Evidence invalidates only the derived projection.
+    # Appending source Evidence is the primary fact-source change.
     valid_at = "2026-11-21T08:30:00Z"
     insert_source_evidence(
         project_id, work_id, "artifact://stage4c/gamma.txt",
@@ -371,7 +375,11 @@ def test_evidence_work_grant_resource_invalidation(
     assert_status(memory, "ready", "rebuild after Evidence append")
     memory_id = memory["derived_memory_id"]
 
-    # Dependency Work state participates in the pinned source snapshot.
+    # Work status/title remains authoritative outside memory. The Pack becomes
+    # stale, but the Evidence-only projection is unchanged and reusable.
+    work_pack = stage4b.compile_pack(project_id, work_id, resource_id, session_id)
+    assert_pack_contains_memory(work_pack, memory_id)
+    before_work_update = memory_row(memory_id)
     dependency_id = scalar(
         "SELECT target_work_id::text FROM aep.work_relations "
         f"WHERE source_work_id={lit(work_id)}::uuid "
@@ -381,21 +389,42 @@ def test_evidence_work_grant_resource_invalidation(
         "UPDATE aep.works SET title=title || ' changed',version=version+1 "
         f"WHERE work_id={lit(dependency_id)}::uuid;"
     )
-    assert_invalidated(memory_id, "work_or_dependency_state_changed")
-    memory = rebuild(project_id, work_id, resource_id, session_id)
-    assert_status(memory, "ready", "rebuild after dependency Work change")
-    memory_id = memory["derived_memory_id"]
+    after_work_update = memory_row(memory_id)
+    if after_work_update["status"] != "ready" or after_work_update["memory_content"] != before_work_update["memory_content"]:
+        raise AssertionError("Work metadata became an authority/input for Evidence-derived memory")
+    assert_status(
+        stage4b.fetch_pack(work_pack["pack_id"], session_id),
+        "stale",
+        "Context Pack after Work state change",
+    )
+    assert_pack_contains_memory(
+        stage4b.compile_pack(project_id, work_id, resource_id, session_id),
+        memory_id,
+    )
 
-    # Access/grant version is part of the authorized source scope.
+    # Grant/version changes affect authorization and Pack freshness, not the
+    # source facts. Each memory query still goes through the current scope gate.
+    grant_pack = stage4b.compile_pack(project_id, work_id, resource_id, session_id)
+    assert_pack_contains_memory(grant_pack, memory_id)
+    before_grant_update = memory_row(memory_id)
     psql(
         "UPDATE aep.project_resources SET grant_version=grant_version+1 "
         f"WHERE project_id={lit(project_id)}::uuid AND resource_id={lit(resource_id)}::uuid;"
     )
-    assert_invalidated(memory_id, "project_resource_grant_changed")
-    memory = rebuild(project_id, work_id, resource_id, session_id)
-    assert_status(memory, "ready", "rebuild after ProjectResource grant change")
-    memory_id = memory["derived_memory_id"]
+    after_grant_update = memory_row(memory_id)
+    if after_grant_update["status"] != "ready" or after_grant_update["memory_content"] != before_grant_update["memory_content"]:
+        raise AssertionError("Authorization metadata became part of derived memory facts")
+    assert_status(
+        stage4b.fetch_pack(grant_pack["pack_id"], session_id),
+        "stale",
+        "Context Pack after grant version change",
+    )
+    assert_pack_contains_memory(
+        stage4b.compile_pack(project_id, work_id, resource_id, session_id),
+        memory_id,
+    )
 
+    # The resource identity itself is source scope; a change invalidates it.
     psql(
         "UPDATE aep.resources SET display_name=display_name || ' changed' "
         f"WHERE resource_id={lit(resource_id)}::uuid;"
@@ -405,31 +434,24 @@ def test_evidence_work_grant_resource_invalidation(
     assert_status(memory, "ready", "rebuild after physical Resource change")
     memory_id = memory["derived_memory_id"]
 
-    # Project state is a source input, and its changes invalidate the projection.
-    psql(
-        "UPDATE aep.projects SET name=name || ' changed' "
-        f"WHERE project_id={lit(project_id)}::uuid;"
-    )
-    assert_invalidated(memory_id, "project_source_state_changed")
-    memory = rebuild(project_id, work_id, resource_id, session_id)
-    assert_status(memory, "ready", "rebuild after project state change")
-    memory_id = memory["derived_memory_id"]
-
-    # Revoke the existing grant using the supported status transition. The
-    # immutable projection remains as invalidated provenance, but the rebuild
-    # API must deny access before reading the Evidence or derived-memory rows.
+    # Revoking access does not make memory authoritative or delete its source
+    # record. It only prevents retrieval before the memory row is queried.
     psql(
         "UPDATE aep.project_resources SET status='revoked',"
         "revoked_at=clock_timestamp(),grant_version=grant_version+1 "
         f"WHERE project_id={lit(project_id)}::uuid AND resource_id={lit(resource_id)}::uuid;"
     )
-    assert_invalidated(memory_id, "project_resource_grant_changed")
+    if memory_row(memory_id)["status"] != "ready":
+        raise AssertionError("Grant revocation must not rewrite source-derived memory")
     revoked_result = rebuild(project_id, work_id, resource_id, session_id)
     assert_status(revoked_result, "denied", "rebuild after project grant revocation")
     if revoked_result.get("source_count") != 0:
         raise AssertionError("Revoked project returned source rows during rebuild")
-    if memory_row(memory_id)["status"] != "invalidated":
-        raise AssertionError("Grant revocation removed the derived-memory provenance history")
+    assert_status(
+        stage4b.compile_pack(project_id, work_id, resource_id, session_id),
+        "denied",
+        "Context Pack retrieval after grant revocation",
+    )
 
     # Deleted or changed Evidence rows are rejected, never repaired in place.
     evidence_id = scalar(
