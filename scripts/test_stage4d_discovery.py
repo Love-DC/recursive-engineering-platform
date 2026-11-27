@@ -72,7 +72,7 @@ def setup_scope(*, access_mode: str = "write") -> tuple[str, str, str]:
     resource_id = scalar(
         "INSERT INTO aep.resources(provider,host,resource_type,stable_resource_id,canonical_key,display_name) "
         "VALUES('github','github.com','repository',"
-        f"{lit(stable_id)},{lit('stage4d:'+stable_id)},'Stage 4D test repository') "
+        f"{lit(stable_id)},{lit('repository:'+stable_id)},'Stage 4D test repository') "
         "RETURNING resource_id;"
     )
     decision_id = ""
