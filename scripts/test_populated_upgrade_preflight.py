@@ -349,8 +349,8 @@ def assert_0014_matching_stale_claim_expiry(
     )
     execution_b, fence_b = claim_work(work_b)
     a_state = scalar(
-        "SELECT status || '|' || (lease_until IS NULL)::text || '|' "
-        "(released_at IS NOT NULL)::text FROM aep.resource_claims "
+        "SELECT concat(status, '|', (lease_until IS NULL)::text, '|', "
+        "(released_at IS NOT NULL)::text) FROM aep.resource_claims "
         f"WHERE execution_id={lit(execution_a)}::uuid;"
     )
     c_state = scalar(
