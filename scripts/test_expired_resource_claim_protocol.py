@@ -6,6 +6,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import time
 from pathlib import Path
 from uuid import uuid4
 
@@ -16,6 +17,23 @@ HOST = os.environ.get("PGHOST", "127.0.0.1")
 PORT = os.environ.get("PGPORT", "5432")
 USER = os.environ.get("PGUSER", "postgres")
 PASSWORD = os.environ.get("PGPASSWORD", "postgres")
+
+
+def start_psql(sql: str, *, db: str = DATABASE) -> subprocess.Popen[str]:
+    command = [
+        "psql", "-X", "-q", "-A", "-t", "-v", "ON_ERROR_STOP=1",
+        "-h", HOST, "-p", PORT, "-U", USER, "-d", db,
+        "-c", sql,
+    ]
+    environment = os.environ.copy()
+    environment["PGPASSWORD"] = PASSWORD
+    return subprocess.Popen(
+        command,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=environment,
+    )
 
 
 def psql(
@@ -83,16 +101,95 @@ def prepare_work(project_id: str, resource_id: str, identity: str, resource_ref:
     return work_id
 
 
-def claim(work_id: str) -> tuple[str, int]:
+def claim(work_id: str, lease_seconds: int = 600) -> tuple[str, int]:
     result = scalar(
         "SET ROLE aep_runtime; "
         "SELECT execution_id::text || '|' || fence::text "
         "FROM aep.claim_work("
-        f"{lit(work_id)}::uuid,{lit(str(uuid4()))}::uuid,600);"
+        f"{lit(work_id)}::uuid,{lit(str(uuid4()))}::uuid,{lease_seconds});"
     )
     execution_id, fence_text = result.split("|", 1)
     return execution_id, int(fence_text)
 
+
+def verify_renewal_serializes_with_resource_reclaim(
+    work_id: str, execution_id: str, fence: int, resource_id: str
+) -> None:
+    expected_version = scalar(
+        f"SELECT version FROM aep.works WHERE work_id={lit(work_id)}::uuid;"
+    )
+    psql(
+        "UPDATE aep.executions "
+        "SET lease_until=clock_timestamp()+interval '3 seconds' "
+        f"WHERE execution_id={lit(execution_id)}::uuid; "
+        "UPDATE aep.resource_claims "
+        "SET lease_until=clock_timestamp()+interval '3 seconds' "
+        f"WHERE execution_id={lit(execution_id)}::uuid AND status='active';"
+    )
+
+    application_name = "aep-expired-claim-renew-lock-test"
+    blocker_sql = (
+        f"SET application_name={lit(application_name)}; "
+        "BEGIN; "
+        "SELECT resource_id FROM aep.resources "
+        f"WHERE resource_id={lit(resource_id)}::uuid FOR UPDATE; "
+        "SELECT pg_sleep(4); "
+        "COMMIT;"
+    )
+    blocker = start_psql(blocker_sql)
+    try:
+        lock_held = False
+        for _ in range(60):
+            if scalar(
+                "SELECT EXISTS (SELECT 1 FROM pg_stat_activity "
+                f"WHERE application_name={lit(application_name)} "
+                "AND state='active' AND query LIKE 'SELECT pg_sleep(4)%')::text;"
+            ) == "true":
+                lock_held = True
+                break
+            if blocker.poll() is not None:
+                break
+            time.sleep(0.05)
+        if not lock_held:
+            stdout, stderr = blocker.communicate(timeout=5)
+            raise AssertionError(
+                "resource lock blocker did not reach its sleep statement: "
+                f"stdout={stdout}; stderr={stderr}"
+            )
+
+        renewal_sql = (
+            "SET ROLE aep_runtime; "
+            "SELECT * FROM aep.renew_execution("
+            f"{lit(work_id)}::uuid,{lit(execution_id)}::uuid,{fence},"
+            f"{expected_version}::bigint,600);"
+        )
+        renewal = start_psql(renewal_sql)
+        time.sleep(0.25)
+        if renewal.poll() is not None:
+            stdout, stderr = renewal.communicate(timeout=5)
+            raise AssertionError(
+                "renew_execution completed while another transaction held the "
+                "physical Resource lock; lease renewal is not serialized: "
+                f"stdout={stdout}; stderr={stderr}"
+            )
+
+        blocker_stdout, blocker_stderr = blocker.communicate(timeout=7)
+        if blocker.returncode != 0:
+            raise RuntimeError(
+                f"resource lock blocker failed: {blocker_stdout}; {blocker_stderr}"
+            )
+        renewal_stdout, renewal_stderr = renewal.communicate(timeout=7)
+        if renewal.returncode == 0 or "expired lease" not in renewal_stderr.lower():
+            raise AssertionError(
+                "renewal should re-check the lease after waiting for the Resource "
+                f"lock; rc={renewal.returncode}; stdout={renewal_stdout}; "
+                f"stderr={renewal_stderr}"
+            )
+    finally:
+        if blocker.poll() is None:
+            blocker.terminate()
+            blocker.communicate(timeout=5)
+    print("PASS renewal/reclaim serialization: renewal waits on ordered Resource lock and rejects after lease expiry")
 
 def main() -> None:
     migration_paths = sorted(MIGRATIONS.glob("*.sql"))
@@ -189,6 +286,10 @@ def main() -> None:
             f"contender={contender_state}"
         )
     print("PASS live exclusion: a non-expired ResourceClaim blocks without partial Work/Execution writes")
+
+    verify_renewal_serializes_with_resource_reclaim(
+        owner_work, owner_execution, 1, resource_id
+    )
 
     # Simulate an elapsed Execution lease and its still-active ResourceClaim.
     # The unrelated ref can proceed, but must not clean a claim for another ref.
