@@ -153,17 +153,17 @@ def expect_missing_capability_status(
 
 
 def setup_database() -> list[Path]:
-    # Stage 3 is pinned to the migrations it introduced; later additive stages
-    # have their own protocol suites and clean-chain checks.
-    paths = sorted(path for path in MIGRATIONS.glob("*.sql") if path.name[:4] <= "0009")
+    # This regression includes its additive hardening migration at 0013, so
+    # apply the complete ordered prototype chain through that migration.
+    paths = sorted(path for path in MIGRATIONS.glob("*.sql") if path.name[:4] <= "0013")
     versions: list[int] = []
     for path in paths:
         match = re.fullmatch(r"(\d{4})_[a-z0-9_]+\.sql", path.name)
         if not match:
             raise SystemExit(f"Invalid migration filename: {path.name}")
         versions.append(int(match.group(1)))
-    if versions != list(range(1, 10)):
-        raise SystemExit(f"Expected contiguous migrations 0001..0009, got {versions}")
+    if versions != list(range(1, 14)):
+        raise SystemExit(f"Expected contiguous migrations 0001..0013, got {versions}")
 
     psql(f"DROP DATABASE IF EXISTS {DATABASE} WITH (FORCE);", db="postgres")
     psql(f"CREATE DATABASE {DATABASE};", db="postgres")
