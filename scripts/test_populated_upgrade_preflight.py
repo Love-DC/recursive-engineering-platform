@@ -138,7 +138,7 @@ def setup_repository(manifest: dict) -> tuple[str, str, str]:
         "project_id,resource_id,access_mode,status,grant_version,grant_decision_id"
         ") VALUES("
         f"{lit(project_id)}::uuid,{lit(resource_id)}::uuid,"
-        "'read_write','active',1,{lit(decision_id)}::uuid);"
+        f"'read_write','active',1,{lit(decision_id)}::uuid);"
     )
     psql(
         "SELECT aep.register_delivery_adapter_manifest("
@@ -355,11 +355,11 @@ def assert_0014_matching_stale_claim_expiry(
     )
     c_state = scalar(
         "SELECT status || '|' || (lease_until<=clock_timestamp())::text "
-        "FROM aep.resource_claims WHERE execution_id={lit(execution_c)}::uuid;"
+        f"FROM aep.resource_claims WHERE execution_id={lit(execution_c)}::uuid;"
     )
     b_state = scalar(
         "SELECT status || '|' || (lease_until>clock_timestamp())::text "
-        "FROM aep.resource_claims WHERE execution_id={lit(execution_b)}::uuid;"
+        f"FROM aep.resource_claims WHERE execution_id={lit(execution_b)}::uuid;"
     )
     if a_state != "expired|true|true":
         raise AssertionError(f"0014 did not expire only the matching stale claim: {a_state}")
