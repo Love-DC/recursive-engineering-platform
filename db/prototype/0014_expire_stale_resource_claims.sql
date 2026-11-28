@@ -320,4 +320,136 @@ GRANT EXECUTE ON FUNCTION aep.claim_work(uuid, uuid, integer) TO aep_runtime;
 COMMENT ON FUNCTION aep.claim_work(uuid, uuid, integer) IS
   'Atomically claims READY Work and expires only matching ResourceClaims whose non-null lease has elapsed before conflict validation.';
 
+CREATE OR REPLACE FUNCTION aep.renew_execution(
+  p_work_id uuid,
+  p_execution_id uuid,
+  p_fence bigint,
+  p_expected_work_version bigint,
+  p_lease_seconds integer DEFAULT 300
+)
+RETURNS TABLE (
+  lease_until timestamptz,
+  work_version bigint
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, aep
+AS $function$
+DECLARE
+  v_work aep.works%ROWTYPE;
+  v_execution aep.executions%ROWTYPE;
+  v_now timestamptz;
+  v_lease_until timestamptz;
+  v_work_version bigint;
+  v_expected_claims bigint;
+  v_active_claims bigint;
+  v_resource_id uuid;
+BEGIN
+  IF p_work_id IS NULL OR p_execution_id IS NULL OR p_fence IS NULL
+     OR p_expected_work_version IS NULL THEN
+    RAISE EXCEPTION 'work_id, execution_id, fence and expected work version are required'
+      USING ERRCODE = '22004';
+  END IF;
+  IF p_lease_seconds IS NULL OR p_lease_seconds NOT BETWEEN 1 AND 86400 THEN
+    RAISE EXCEPTION 'lease_seconds must be between 1 and 86400'
+      USING ERRCODE = '22023';
+  END IF;
+
+  SELECT work_row.* INTO v_work
+  FROM aep.works AS work_row
+  WHERE work_row.work_id = p_work_id
+  FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Work does not exist' USING ERRCODE = '23503';
+  END IF;
+
+  -- Serialize lease renewal with claim_work's physical-resource locks.
+  -- Both paths lock Work first, then Resource rows in the same global order,
+  -- before either path can change or reclaim ResourceClaims.
+  FOR v_resource_id IN
+    SELECT DISTINCT requirement.resource_id
+    FROM aep.work_resource_requirements AS requirement
+    WHERE requirement.work_id = p_work_id
+    ORDER BY requirement.resource_id
+  LOOP
+    PERFORM 1
+    FROM aep.resources AS resource_row
+    WHERE resource_row.resource_id = v_resource_id
+    FOR UPDATE;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'Execution physical Resource no longer exists'
+        USING ERRCODE = '55000';
+    END IF;
+  END LOOP;
+
+  SELECT execution_row.* INTO v_execution
+  FROM aep.executions AS execution_row
+  WHERE execution_row.work_id = p_work_id
+    AND execution_row.execution_id = p_execution_id
+  FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Execution does not belong to Work'
+      USING ERRCODE = '23503';
+  END IF;
+
+  v_now := clock_timestamp();
+  IF v_work.version <> p_expected_work_version THEN
+    RAISE EXCEPTION 'Work version changed; refresh before retrying'
+      USING ERRCODE = '40001';
+  END IF;
+  IF v_work.status <> 'running'
+     OR v_work.current_execution_id <> p_execution_id
+     OR v_work.fence_generation <> p_fence
+     OR v_execution.fence <> p_fence
+     OR v_execution.status NOT IN ('claimed', 'running')
+     OR v_execution.lease_until IS NULL
+     OR v_execution.lease_until <= v_now THEN
+    RAISE EXCEPTION 'Execution is stale, superseded, or has an expired lease'
+      USING ERRCODE = '55000';
+  END IF;
+
+  SELECT count(*) INTO v_expected_claims
+  FROM aep.work_resource_requirements AS requirement
+  WHERE requirement.work_id = p_work_id;
+
+  SELECT count(*) INTO v_active_claims
+  FROM aep.resource_claims AS claim
+  WHERE claim.execution_id = p_execution_id
+    AND claim.status = 'active';
+
+  IF v_expected_claims <> v_active_claims THEN
+    RAISE EXCEPTION 'Execution resource reservation set is incomplete'
+      USING ERRCODE = '55000';
+  END IF;
+
+  v_lease_until := v_now + make_interval(secs => p_lease_seconds);
+  UPDATE aep.executions
+  SET lease_until = v_lease_until,
+      updated_at = v_now
+  WHERE execution_id = p_execution_id
+    AND work_id = p_work_id;
+
+  UPDATE aep.resource_claims
+  SET lease_until = v_lease_until
+  WHERE execution_id = p_execution_id
+    AND status = 'active';
+
+  UPDATE aep.works
+  SET version = version + 1,
+      updated_at = v_now
+  WHERE work_id = p_work_id
+    AND version = p_expected_work_version
+  RETURNING version INTO v_work_version;
+
+  RETURN QUERY SELECT v_lease_until, v_work_version;
+END
+$function$;
+
+ALTER FUNCTION aep.renew_execution(uuid, uuid, bigint, bigint, integer) OWNER TO aep_owner;
+REVOKE ALL ON FUNCTION aep.renew_execution(uuid, uuid, bigint, bigint, integer) FROM PUBLIC, aep_runtime;
+GRANT EXECUTE ON FUNCTION aep.renew_execution(uuid, uuid, bigint, bigint, integer) TO aep_runtime;
+COMMENT ON FUNCTION aep.renew_execution(uuid, uuid, bigint, bigint, integer) IS
+  'Renews only a current fenced Execution after locking its ordered physical Resources and validating the complete active ResourceClaim set.';
+
 COMMIT;
