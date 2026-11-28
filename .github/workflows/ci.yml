@@ -99,3 +99,5 @@ jobs:
         run: python scripts/test_stage4d_discovery.py
       - name: Run Stage 4A ResourceClaim recovery projection tests
         run: python scripts/test_stage4a_resource_claim_recovery.py
+      - name: Run populated 0012-to-0015 migration upgrade preflight
+        run: python scripts/test_populated_upgrade_preflight.py
