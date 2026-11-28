@@ -199,6 +199,7 @@ BEGIN
         'normalized_write_set', claim_row.normalized_write_set,
         'status', claim_row.status,
         'lease_until', claim_row.lease_until,
+        'lease_expired', claim_row.lease_until IS NOT NULL AND claim_row.lease_until <= v_now,
         'fence', claim_row.fence,
         'created_at', claim_row.created_at,
         'released_at', claim_row.released_at,
