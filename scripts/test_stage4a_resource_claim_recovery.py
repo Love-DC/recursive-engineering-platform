@@ -182,6 +182,8 @@ def test_project_scoped_claim_recovery() -> None:
         raise AssertionError(f"takeover fence did not advance: {fence_a} -> {fence_b}")
 
     snapshot = recover(project_a)
+    if snapshot["authorization"].get("checked_before_resource_claim_retrieval") is not True:
+        raise AssertionError("ResourceClaim recovery did not report the project scope gate")
     claims = snapshot.get("resource_claims")
     if not isinstance(claims, list) or len(claims) != 2:
         raise AssertionError(f"Expected both current and prior Execution claims: {claims}")
