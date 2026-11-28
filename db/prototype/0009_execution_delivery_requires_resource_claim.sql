@@ -211,6 +211,21 @@ BEGIN
       USING ERRCODE = '42501';
   END IF;
 
+  -- The grant-validation loop reuses v_requirement; restore the target
+  -- requirement before validating and locking its corresponding claim.
+  SELECT requirement_row.* INTO v_requirement
+  FROM aep.work_resource_requirements AS requirement_row
+  WHERE requirement_row.project_id = v_project_id
+    AND requirement_row.work_id = p_work_id
+    AND requirement_row.resource_id = p_resource_id
+    AND requirement_row.resource_ref = p_base_ref
+  ORDER BY requirement_row.requirement_id
+  LIMIT 1;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Execution has no matching Work ResourceRequirement for the target repository ref'
+      USING ERRCODE = '55000';
+  END IF;
+
   -- Resource and grant locks may have taken time. Re-read the clock only after
   -- all allocation locks are held so an expiring lease cannot pass on a stale
   -- timestamp captured before lock acquisition.
