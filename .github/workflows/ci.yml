@@ -83,6 +83,8 @@ jobs:
         run: python scripts/test_postgres_prototype.py
       - name: Run Stage 2A atomic coordination tests
         run: python scripts/test_stage2a_protocol.py
+      - name: Run expired ResourceClaim lease regression
+        run: python scripts/test_expired_resource_claim_protocol.py
       - name: Run Stage 2B dependency graph protocol tests
         run: python scripts/test_stage2b_protocol.py
       - name: Run Stage 3 GitHub delivery reconciliation tests
