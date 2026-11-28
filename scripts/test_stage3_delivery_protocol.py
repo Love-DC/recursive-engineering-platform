@@ -155,15 +155,15 @@ def expect_missing_capability_status(
 def setup_database() -> list[Path]:
     # Stage 3 is pinned to the migrations it introduced; later additive stages
     # have their own protocol suites and clean-chain checks.
-    paths = sorted(path for path in MIGRATIONS.glob("*.sql") if path.name[:4] <= "0008")
+    paths = sorted(path for path in MIGRATIONS.glob("*.sql") if path.name[:4] <= "0009")
     versions: list[int] = []
     for path in paths:
         match = re.fullmatch(r"(\d{4})_[a-z0-9_]+\.sql", path.name)
         if not match:
             raise SystemExit(f"Invalid migration filename: {path.name}")
         versions.append(int(match.group(1)))
-    if versions != list(range(1, 9)):
-        raise SystemExit(f"Expected contiguous migrations 0001..0008, got {versions}")
+    if versions != list(range(1, 10)):
+        raise SystemExit(f"Expected contiguous migrations 0001..0009, got {versions}")
 
     psql(f"DROP DATABASE IF EXISTS {DATABASE} WITH (FORCE);", db="postgres")
     psql(f"CREATE DATABASE {DATABASE};", db="postgres")
@@ -212,12 +212,21 @@ def setup_repository_target(manifest: dict) -> tuple[str, str, str, str]:
     return project_id, resource_id, repository_id, "Love-DC/recursive-engineering-platform"
 
 
-def create_running_work(project_id: str, identity: str) -> tuple[str, str, int]:
+def create_running_work(
+    project_id: str, identity: str, resource_id: str | None = None,
+    resource_ref: str = "refs/heads/main",
+) -> tuple[str, str, int]:
     work_id = scalar(
         "SELECT work_id::text FROM aep.register_work("
         f"{lit(project_id)}::uuid,{lit(str(uuid4()))},{lit(str(uuid4()))}::uuid,"
         f"'stage3',{lit(identity)},1,'implementation',{lit(identity)},'{{}}'::jsonb,NULL);"
     )
+    if resource_id is not None:
+        psql(
+            "SELECT aep.set_work_resource_requirements("
+            f"{lit(work_id)}::uuid,jsonb_build_array(jsonb_build_object("
+            f"'resource_id',{lit(resource_id)}::uuid,'resource_ref',{lit(resource_ref)})));"
+        )
     status = scalar(f"SELECT work_status FROM aep.set_work_ready({lit(work_id)}::uuid);")
     if status != "ready":
         raise AssertionError(f"Work did not become READY: {status}")
@@ -244,17 +253,49 @@ def takeover(work_id: str, execution_id: str) -> tuple[str, int]:
     return next_execution_id, int(fence)
 
 
-def allocate(
+def allocate_sql(
     work_id: str, execution_id: str, fence: int, resource_id: str,
     repository_id: str, repository_full_name: str,
+    base_ref: str = "refs/heads/main",
 ) -> str:
-    result = scalar(
+    return (
         "SELECT aep.allocate_execution_delivery("
         f"{lit(work_id)}::uuid,{lit(execution_id)}::uuid,{fence},"
         f"{lit(resource_id)}::uuid,'github.com',{lit(repository_id)},"
-        f"{lit(repository_full_name)},'refs/heads/main',{lit('a'*40)});"
+        f"{lit(repository_full_name)},{lit(base_ref)},{lit('a'*40)});"
     )
-    return json.loads(result)["delivery_branch"]
+
+
+def allocate(
+    work_id: str, execution_id: str, fence: int, resource_id: str,
+    repository_id: str, repository_full_name: str,
+    base_ref: str = "refs/heads/main",
+) -> str:
+    return json.loads(scalar(allocate_sql(
+        work_id, execution_id, fence, resource_id, repository_id,
+        repository_full_name, base_ref
+    )))["delivery_branch"]
+
+
+def release_resource_claims(execution_id: str) -> None:
+    psql(
+        "UPDATE aep.resource_claims SET status='released', lease_until=NULL, "
+        "released_at=clock_timestamp() "
+        f"WHERE execution_id={lit(execution_id)}::uuid AND status IN ('reserved','active');"
+    )
+
+
+def finish_work(work_id: str, execution_id: str, fence: int) -> None:
+    version = scalar(
+        f"SELECT version::text FROM aep.works WHERE work_id={lit(work_id)}::uuid;"
+    )
+    result = scalar(
+        "SELECT work_status FROM aep.finish_execution("
+        f"{lit(work_id)}::uuid,{lit(execution_id)}::uuid,{fence},"
+        f"{version},'succeeded','{{}}'::jsonb);"
+    )
+    if result != "delivered":
+        raise AssertionError(f"Execution did not finish as delivered: {result}")
 
 
 def create_intent(
@@ -386,11 +427,118 @@ def test_manifest_contract(manifest: dict) -> None:
     print("PASS T22: supported, unsupported, unavailable, and single-principal limitations are explicit")
 
 
+def create_secondary_repository_resource(project_id: str, primary_resource_id: str) -> tuple[str, str, str]:
+    repository_id = "999990001"
+    grant_decision_id = scalar(
+        "SELECT grant_decision_id::text FROM aep.project_resources "
+        f"WHERE project_id={lit(project_id)}::uuid "
+        f"AND resource_id={lit(primary_resource_id)}::uuid;"
+    )
+    resource_id = scalar(
+        "INSERT INTO aep.resources(provider,host,resource_type,stable_resource_id,canonical_key,display_name) "
+        f"VALUES('github','github.com','repository',{lit(repository_id)},"
+        f"{lit('repository:'+repository_id)},'Unclaimed test target') RETURNING resource_id;"
+    )
+    psql(
+        "INSERT INTO aep.project_resources("
+        "project_id,resource_id,access_mode,status,grant_version,grant_decision_id) VALUES("
+        f"{lit(project_id)}::uuid,{lit(resource_id)}::uuid,'write','active',1,"
+        f"{lit(grant_decision_id)}::uuid);"
+    )
+    return resource_id, repository_id, "Love-DC/unclaimed-test-target"
+
+
+def test_delivery_requires_resource_claim(
+    project_id: str, resource_id: str, repository_id: str, repository_full_name: str,
+) -> None:
+    # A project write grant alone must not authorize allocation without a
+    # Work-declared repository/ref requirement.
+    work, execution, fence = create_running_work(
+        project_id, "t-claim-guard-no-requirement"
+    )
+    expect_error(
+        allocate_sql(work, execution, fence, resource_id, repository_id, repository_full_name),
+        "matching Work ResourceRequirement",
+        "delivery allocation rejects a Work with no ResourceRequirement",
+    )
+
+    # A requirement for a different branch ref cannot authorize main.
+    work, execution, fence = create_running_work(
+        project_id, "t-claim-guard-wrong-ref", resource_id, "refs/heads/develop"
+    )
+    expect_error(
+        allocate_sql(work, execution, fence, resource_id, repository_id, repository_full_name),
+        "matching Work ResourceRequirement",
+        "delivery allocation rejects a mismatched repository ref",
+    )
+    release_resource_claims(execution)
+
+    # An active execution without its still-live exact claim must fail closed.
+    work, execution, fence = create_running_work(
+        project_id, "t-claim-guard-missing-claim", resource_id
+    )
+    release_resource_claims(execution)
+    expect_error(
+        allocate_sql(work, execution, fence, resource_id, repository_id, repository_full_name),
+        "reservation set is incomplete",
+        "delivery allocation rejects a missing ResourceClaim",
+    )
+
+    # Expired leases are not usable even when the claim row still says active.
+    work, execution, fence = create_running_work(
+        project_id, "t-claim-guard-expired-claim", resource_id
+    )
+    psql(
+        "UPDATE aep.resource_claims SET lease_until=clock_timestamp()-interval '1 second' "
+        f"WHERE execution_id={lit(execution)}::uuid AND status='active';"
+    )
+    expect_error(
+        allocate_sql(work, execution, fence, resource_id, repository_id, repository_full_name),
+        "reservation set is incomplete",
+        "delivery allocation rejects an expired ResourceClaim",
+    )
+    release_resource_claims(execution)
+
+    # A claim with a fence other than the current Execution fence is stale.
+    work, execution, fence = create_running_work(
+        project_id, "t-claim-guard-stale-fence", resource_id
+    )
+    psql(
+        f"UPDATE aep.resource_claims SET fence={fence + 1} "
+        f"WHERE execution_id={lit(execution)}::uuid AND status='active';"
+    )
+    expect_error(
+        allocate_sql(work, execution, fence, resource_id, repository_id, repository_full_name),
+        "reservation set is incomplete",
+        "delivery allocation rejects a stale-fence ResourceClaim",
+    )
+    release_resource_claims(execution)
+
+    # Another authorized repository in the same Project is not interchangeable
+    # with the physical Resource required and claimed by this Work.
+    other_id, other_repository_id, other_name = create_secondary_repository_resource(
+        project_id, resource_id
+    )
+    work, execution, fence = create_running_work(
+        project_id, "t-claim-guard-wrong-resource", resource_id
+    )
+    expect_error(
+        allocate_sql(work, execution, fence, other_id, other_repository_id, other_name),
+        "matching Work ResourceRequirement",
+        "delivery allocation rejects a different authorized repository Resource",
+    )
+    release_resource_claims(execution)
+
+    print("PASS T27: delivery allocation requires a Work requirement and a complete current fenced ResourceClaim set")
+
+
 def test_execution_delivery_and_lost_response(
     project_id: str, resource_id: str, repository_id: str, repository_full_name: str,
     provider: FakeGitHubProvider,
 ) -> tuple[str, str, int, str, str, dict]:
-    work_id, execution_a, fence_a = create_running_work(project_id, "t12-independent-attempts")
+    work_id, execution_a, fence_a = create_running_work(
+        project_id, "t12-independent-attempts", resource_id
+    )
     branch_a = allocate(
         work_id, execution_a, fence_a, resource_id, repository_id, repository_full_name
     )
@@ -669,13 +817,16 @@ def test_exact_sha_lifecycle(
         raise AssertionError("Unsupported deployment appeared as lifecycle evidence")
     print("PASS T14: COMMENTED process review and native GitHub APPROVED evidence are distinct")
     print("PASS T15: PR HEAD CI, merge SHA, post-merge CI, deployment boundary, and Owner acceptance are distinct")
+    finish_work(work_id, execution_id, fence)
 
 
 def test_stale_external_merge(
     project_id: str, resource_id: str, repository_id: str, repository_full_name: str,
     provider: FakeGitHubProvider,
 ) -> None:
-    work_id, execution_old, fence_old = create_running_work(project_id, "t13-stale-merge")
+    work_id, execution_old, fence_old = create_running_work(
+        project_id, "t13-stale-merge", resource_id
+    )
     branch = allocate(
         work_id, execution_old, fence_old, resource_id, repository_id, repository_full_name
     )
@@ -752,6 +903,7 @@ def test_stale_external_merge(
     )
     if work_state != f"running|{execution_new}|{fence_new}":
         raise AssertionError(f"T13 reconciliation falsely completed or rewound Work: {work_state}")
+    finish_work(work_id, execution_new, fence_new)
     print("PASS T13: stale external merge is reconciled, actual merge SHA retained, and old review/CI evidence invalidated")
 
 
@@ -762,6 +914,9 @@ def main() -> None:
     project_id, resource_id, repository_id, repository_full_name = setup_repository_target(manifest)
     provider = FakeGitHubProvider()
 
+    test_delivery_requires_resource_claim(
+        project_id, resource_id, repository_id, repository_full_name
+    )
     work_id, execution_id, fence, branch, _, pr_observation = test_execution_delivery_and_lost_response(
         project_id, resource_id, repository_id, repository_full_name, provider
     )
@@ -772,7 +927,7 @@ def main() -> None:
     test_stale_external_merge(
         project_id, resource_id, repository_id, repository_full_name, provider
     )
-    print("PASS Stage 3 PostgreSQL 17.12 delivery protocol: T12, T13, T14, T15, T21, T22")
+    print("PASS Stage 3 PostgreSQL 17.12 delivery protocol: T12, T13, T14, T15, T21, T22, T27")
 
 
 if __name__ == "__main__":
