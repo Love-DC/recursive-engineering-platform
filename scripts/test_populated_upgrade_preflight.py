@@ -20,9 +20,12 @@ ROOT = Path(__file__).resolve().parents[1]
 MIGRATIONS = ROOT / "db" / "prototype"
 MANIFEST_PATH = ROOT / "adapters" / "github-session-tools.json"
 DATABASE = "aep_populated_upgrade_preflight"
-HOST = os.environ.get("PGHOST", "127.0.0.1")
-PORT = os.environ.get("PGPORT", "5432")
-USER = os.environ.get("PGUSER", "postgres")
+# This destructive fixture is intentionally pinned to the CI-local loopback
+# service. Do not allow PGHOST/PGHOSTADDR/PGSERVICE to redirect DROP DATABASE
+# to a hosted or otherwise shared Registry.
+HOST = "127.0.0.1"
+PORT = "5432"
+USER = "postgres"
 PASSWORD = os.environ.get("PGPASSWORD", "postgres")
 REPOSITORY_ID = "999990001"
 REPOSITORY_NAME = "Love-DC/aep-populated-upgrade-fixture"
@@ -43,6 +46,12 @@ def psql(
     ]
     cmd.extend(["-f", str(file)] if file else ["-c", sql or ""])
     env = os.environ.copy()
+    env.pop("PGHOSTADDR", None)
+    env.pop("PGSERVICE", None)
+    env.pop("PGSERVICEFILE", None)
+    env["PGHOST"] = HOST
+    env["PGPORT"] = PORT
+    env["PGUSER"] = USER
     env["PGPASSWORD"] = PASSWORD
     result = subprocess.run(
         cmd, text=True, capture_output=True, env=env, check=False
