@@ -151,7 +151,26 @@ def test_project_scoped_claim_recovery() -> None:
     psql(
         "UPDATE aep.executions SET lease_until=clock_timestamp()-interval '1 second' "
         f"WHERE execution_id={lit(execution_a)}::uuid;"
+        "UPDATE aep.resource_claims SET lease_until=clock_timestamp()-interval '1 second' "
+        f"WHERE execution_id={lit(execution_a)}::uuid AND status='active';"
     )
+    expired_snapshot = recover(project_a)
+    expired_claim = next(
+        row for row in expired_snapshot["resource_claims"] if row["execution_id"] == execution_a
+    )
+    expired_execution = next(
+        row for row in expired_snapshot["executions"] if row["execution_id"] == execution_a
+    )
+    if (
+        expired_claim["status"] != "active"
+        or expired_claim["lease_expired"] is not True
+        or expired_claim["is_current_execution"] is not True
+        or expired_execution["lease_expired"] is not True
+        or expired_execution["old_session_may_still_be_active"] is not True
+        or expired_execution["session_termination_observed"] is not False
+    ):
+        raise AssertionError("Expired lease was not recovered as an active claim without implying session termination")
+
     takeover_session = str(uuid4())
     takeover = scalar(
         "SELECT execution_id::text || '|' || fence::text FROM aep.claim_work("
@@ -181,12 +200,14 @@ def test_project_scoped_claim_recovery() -> None:
         or current["status"] != "active"
         or current["fence"] != fence_b
         or current["lease_until"] is None
+        or current["lease_expired"] is not False
         or current["is_current_execution"] is not True
     ):
         raise AssertionError(f"Current ResourceClaim identity/lease/fence mismatch: {current}")
     if (
         previous["status"] != "expired"
         or previous["lease_until"] is not None
+        or previous["lease_expired"] is not False
         or previous["fence"] != fence_a
         or previous["is_current_execution"] is not False
     ):
