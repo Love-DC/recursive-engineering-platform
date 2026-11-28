@@ -211,6 +211,15 @@ BEGIN
       USING ERRCODE = '42501';
   END IF;
 
+  -- Resource and grant locks may have taken time. Re-read the clock only after
+  -- all allocation locks are held so an expiring lease cannot pass on a stale
+  -- timestamp captured before lock acquisition.
+  v_now := clock_timestamp();
+  IF v_execution.lease_until IS NULL OR v_execution.lease_until <= v_now THEN
+    RAISE EXCEPTION 'Execution lease expired while resource allocation locks were acquired'
+      USING ERRCODE = '55000';
+  END IF;
+
   -- Require a complete set: every declared requirement has one live claim
   -- owned by this exact Execution and fence, with the same ref/write-set and
   -- lease deadline. Extra, stale-fence, expired, or mismatched claims do not count.
