@@ -201,9 +201,9 @@ def main() -> None:
         if not match:
             raise SystemExit(f"Invalid migration filename: {path.name}")
         versions.append(int(match.group(1)))
-    expected = list(range(1, 15))
+    expected = list(range(1, 16))
     if versions != expected:
-        raise SystemExit(f"Expected contiguous migrations 0001..0014, got {versions}")
+        raise SystemExit(f"Expected contiguous migrations 0001..0015, got {versions}")
 
     psql(f"DROP DATABASE IF EXISTS {DATABASE} WITH (FORCE);", db="postgres")
     psql(f"CREATE DATABASE {DATABASE};", db="postgres")
