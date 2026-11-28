@@ -51,8 +51,8 @@ def json_result(sql: str) -> dict:
 def setup_database() -> None:
     paths = sorted(MIGRATIONS.glob("*.sql"))
     versions = [int(path.name[:4]) for path in paths]
-    if versions != list(range(1, 15)):
-        raise SystemExit(f"Expected clean ordered migrations 0001..0014, got {versions}")
+    if versions != list(range(1, 16)):
+        raise SystemExit(f"Expected clean ordered migrations 0001..0015, got {versions}")
     psql(f"DROP DATABASE IF EXISTS {DATABASE} WITH (FORCE);", db="postgres")
     psql(f"CREATE DATABASE {DATABASE};", db="postgres")
     version = scalar("SELECT current_setting('server_version');")
