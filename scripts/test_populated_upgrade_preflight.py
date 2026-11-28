@@ -8,6 +8,7 @@ script; it never connects to a hosted Supabase project.
 
 from __future__ import annotations
 
+import atexit
 import hashlib
 import json
 import os
@@ -19,7 +20,7 @@ from uuid import uuid4
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATIONS = ROOT / "db" / "prototype"
 MANIFEST_PATH = ROOT / "adapters" / "github-session-tools.json"
-DATABASE = "aep_populated_upgrade_preflight"
+DATABASE = "aep_populated_upgrade_preflight_" + uuid4().hex[:8]
 # This destructive fixture is intentionally pinned to the CI-local loopback
 # service. Do not allow PGHOST/PGHOSTADDR/PGSERVICE to redirect DROP DATABASE
 # to a hosted or otherwise shared Registry.
@@ -101,9 +102,18 @@ def migration_paths() -> list[Path]:
     return paths
 
 
+def cleanup_database() -> None:
+    try:
+        # The database name is unique to this process, so cleanup cannot
+        # remove a pre-existing database or another test's fixture.
+        psql(f"DROP DATABASE IF EXISTS {DATABASE};", db="postgres")
+    except Exception as exc:  # cleanup must not hide the original test failure
+        print(f"WARNING: unable to remove disposable database {DATABASE}: {exc}")
+
+
 def setup_database(paths: list[Path]) -> None:
-    psql(f"DROP DATABASE IF EXISTS {DATABASE} WITH (FORCE);", db="postgres")
     psql(f"CREATE DATABASE {DATABASE};", db="postgres")
+    atexit.register(cleanup_database)
     version = scalar("SELECT current_setting('server_version');")
     if not version.startswith("17.12"):
         raise AssertionError(
