@@ -118,15 +118,6 @@ def verify_renewal_serializes_with_resource_reclaim(
     expected_version = scalar(
         f"SELECT version FROM aep.works WHERE work_id={lit(work_id)}::uuid;"
     )
-    psql(
-        "UPDATE aep.executions "
-        "SET lease_until=clock_timestamp()+interval '3 seconds' "
-        f"WHERE execution_id={lit(execution_id)}::uuid; "
-        "UPDATE aep.resource_claims "
-        "SET lease_until=clock_timestamp()+interval '3 seconds' "
-        f"WHERE execution_id={lit(execution_id)}::uuid AND status='active';"
-    )
-
     application_name = "aep-expired-claim-renew-lock-test"
     blocker_sql = (
         f"SET application_name={lit(application_name)}; "
@@ -156,6 +147,17 @@ def verify_renewal_serializes_with_resource_reclaim(
                 "resource lock blocker did not reach its sleep statement: "
                 f"stdout={stdout}; stderr={stderr}"
             )
+
+        # Start the short lease only after the blocker is confirmed to hold
+        # the physical Resource row, so the renewal begins with a live lease.
+        psql(
+            "UPDATE aep.executions "
+            "SET lease_until=clock_timestamp()+interval '3 seconds' "
+            f"WHERE execution_id={lit(execution_id)}::uuid; "
+            "UPDATE aep.resource_claims "
+            "SET lease_until=clock_timestamp()+interval '3 seconds' "
+            f"WHERE execution_id={lit(execution_id)}::uuid AND status='active';"
+        )
 
         renewal_sql = (
             "SET ROLE aep_runtime; "
