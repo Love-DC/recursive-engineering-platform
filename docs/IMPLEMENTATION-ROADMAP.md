@@ -40,6 +40,12 @@ The stage numbers describe two different planning views and must not be read as 
 
 Architecture stage definitions remain unchanged; implementation Stage 2A does not complete the remaining Stage 1 guarantees by itself.
 
+## Current heterogeneous pilot status (2026-11-28)
+
+- **Hexa Game Kernel:** first pilot selected under Owner-approved D13; AEP Project and repository Resource are active with `read_write` access in the isolated non-production instance. Main is `8f091630459f07a3ed44e0d050cda8a303ce030d`. GAP-29 proposal PR #13 merged; exact-merge Run #45999582529 passed. Issue #14 remains open and no GAP-29 implementation is authorized.
+- **Unbroken Frontier:** separately Owner-selected as second pilot; AEP Project and repository Resource are active with `read_write` access. PR #2 merged at `b5c0a7593c2155ecfbe1e52df4b7693ed975c02f`, with exact-head Windows/Android/iOS checks passed. PR #3 remains Draft/Open/Unmerged at `ae4c9796fcb6efd3ec796488f36af569213b1e47`; exact-head shared CI Run #46098239459 failed on Windows, Android and iOS. The detailed Cargo diagnostics are not present in public logs. The shared runner repository `Love-DC/ai-project-governance` is not registered as a Resource under this project, so no shared workflow changes are authorized yet.
+- **Stage 5 ruling:** pilot selection and Project/Resource registration are complete for the selected first/second pilots. Stage 5 remains in progress until the relevant heterogeneous pilot core-suite and adapter acceptance evidence is complete. This does not imply production readiness or authorize production operations.
+
 ## Stages and gates
 
 | Stage | Scope | Exit evidence | Current state |
@@ -51,7 +57,7 @@ Architecture stage definitions remain unchanged; implementation Stage 2A does no
 | 2B | Dependency graph membership, atomic DAG mutation, cycle prevention, graph-wide concurrency, authorization, READY invalidation, and required/optional parent-child completion | Exact-head and post-merge PostgreSQL 17.12 CI; independent review; populated-upgrade regression; T07/T08/T09/T23 | IMPLEMENTED, INDEPENDENTLY REVIEWED, MERGED AND POST-MERGE VERIFIED — PR #43; merge `f222267e015bd3ab6058eb34464b370a5e405171`; Run #85 and Run #86 passed |
 | 3 | GitHub/Actions adapter, per-attempt refs, receipts and reconciliation, exact-SHA lifecycle | Adapter contract and PostgreSQL behavior tests T12–T15/T21/T22; independent review; exact-head and post-merge CI | IMPLEMENTED, INDEPENDENTLY REVIEWED, MERGED AND POST-MERGE VERIFIED — PR #49; candidate `e7e112fa61c13180357ef743e391880e6e44cca1` / tree `b64d5326000351b861edf15f0c81924d95154fb1`; merge `ae3ff5ead7cf4fa3c0e8c47bb47b9beb24f9b18b`; Run #103 and Run #104 SUCCESS |
 | 4 | Session recovery, authorized Context Compiler, evidence-derived memory, bounded discovery | T10/T11 plus authorized Context Packs, T25, T19/T20 | STAGE 4A/4B/4C/4D IMPLEMENTED, COORDINATOR-REVIEWED, MERGED AND POST-MERGE VERIFIED FOR THE DISPOSABLE POSTGRESQL 17.12 PROTOTYPE. Stage 4D PR #84 candidate `647c56da4e763e3174a977c7e24bef1ea066acc7`; exact-head Run #45967867851 PASS; coordinator review [PASS](https://github.com/Love-DC/recursive-engineering-platform/pull/84#pullrequestreview-6085558387); merge `78f942d9c60fe28b20757aeb71644f350d0ec15a`; exact-merge Run #45968284136 PASS. T10/T11, T25, T19/T20 PASS for their tested prototype scopes. Production authorization and deployment gates remain open. |
-| 5 | Heterogeneous project pilot | Owner-selected pilot(s), passed core suite, adapter capability evidence | BLOCKED ON D13 |
+| 5 | Heterogeneous project pilot | Owner-selected pilot(s), passed core suite, adapter capability evidence | IN PROGRESS — D13 first-pilot selection is OWNER-APPROVED; Hexa first-pilot and Unbroken Frontier second-pilot Projects/Resources are registered active in isolated non-production AEP. Registration is complete; core-suite/adapter acceptance and the unresolved PR #3 integration evidence remain open. |
 | 6 | Selective legacy mapping, shadow comparison, project-by-project cutover | Migration reconciliation, rollback evidence, explicit Owner cutover decision | BLOCKED ON OWNER DECISION |
 
 ## Stage 4A — session recovery prototype evidence
@@ -79,7 +85,7 @@ Architecture stage definitions remain unchanged; implementation Stage 2A does no
 - Stage 1 migrations run only in disposable GitHub Actions PostgreSQL 17.12.
 - Stage completion requires exact-SHA CI evidence and independent review; same-session self-review is not independent. The exact current branch-tip SHA and its Actions run are recorded in the live PR/Issue evidence record, rather than embedded in the commit being validated.
 - Stage 4A, Stage 4B, Stage 4C and Stage 4D are implemented, reviewed, merged and post-merge verified for the disposable PostgreSQL prototype. T10/T11, T25 and T19/T20 are PASS for their tested scopes; exact Stage 4D evidence is recorded below.
-- D4 remains provisional. D9/D13/D15/D16 remain open and are not resolved by this PR.
+- D4 remains provisional. D13 is OWNER-APPROVED for first pilot `Love-DC/Hexa-Game-Kernel`; its Project/Resource registration is active. `Love-DC/Unbroken-Frontier` is separately Owner-selected as the second pilot and is also registered active. D9/D15/D16 remain open; neither project registration nor this documentation update resolves production authorization, native approval, or cutover gates.
 - Production authority, pilot selection, and legacy cutover are separate gates, not implied by architecture acceptance.
 
 
