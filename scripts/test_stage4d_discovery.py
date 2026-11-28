@@ -60,7 +60,7 @@ def setup_database() -> None:
         raise AssertionError(f"Stage 4D requires PostgreSQL 17.12; got {version}")
     for path in paths:
         psql(file=path)
-    print("PASS T26: clean ordered migrations 0001..0014 on PostgreSQL 17.12")
+    print("PASS T26: clean ordered migrations 0001..0015 on PostgreSQL 17.12")
 
 
 def setup_scope(*, access_mode: str = "write") -> tuple[str, str, str]:
