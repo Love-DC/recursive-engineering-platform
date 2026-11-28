@@ -97,3 +97,5 @@ jobs:
         run: python scripts/test_stage4c_derived_memory.py
       - name: Run Stage 4D active-session bounded discovery tests
         run: python scripts/test_stage4d_discovery.py
+      - name: Run Stage 4A ResourceClaim recovery projection tests
+        run: python scripts/test_stage4a_resource_claim_recovery.py
