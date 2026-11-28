@@ -212,7 +212,7 @@ def main() -> None:
         raise AssertionError(f"PostgreSQL 17.12 is required; got {version}")
     for path in migration_paths:
         psql(file=path)
-    print("PASS clean migration chain: 0001..0014 on PostgreSQL 17.12")
+    print("PASS clean migration chain: 0001..0015 on PostgreSQL 17.12")
 
     runtime_surface = scalar(
         "SELECT has_function_privilege('aep_runtime',"
