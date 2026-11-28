@@ -143,7 +143,7 @@ def verify_renewal_serializes_with_resource_reclaim(
             if scalar(
                 "SELECT EXISTS (SELECT 1 FROM pg_stat_activity "
                 f"WHERE application_name={lit(application_name)} "
-                "AND state='active' AND query LIKE 'SELECT pg_sleep(4)%')::text;"
+                "AND state='active' AND query LIKE '%pg_sleep(4)%')::text;"
             ) == "true":
                 lock_held = True
                 break
@@ -215,14 +215,16 @@ def main() -> None:
     runtime_surface = scalar(
         "SELECT has_function_privilege('aep_runtime',"
         "'aep.claim_work(uuid,uuid,integer)','EXECUTE')::text "
+        "|| '|' || has_function_privilege('aep_runtime',"
+        "'aep.renew_execution(uuid,uuid,bigint,bigint,integer)','EXECUTE')::text "
         "|| '|' || has_table_privilege('aep_runtime',"
         "'aep.resource_claims','SELECT')::text;"
     )
-    if runtime_surface != "true|false":
+    if runtime_surface != "true|true|false":
         raise AssertionError(
             f"replacement did not preserve the narrow runtime surface: {runtime_surface}"
         )
-    print("PASS runtime surface: claim_work remains executable; ResourceClaims remain unreadable")
+    print("PASS runtime surface: claim/renew RPCs executable; ResourceClaims remain unreadable")
 
     project_id = scalar(
         "INSERT INTO aep.projects(project_key,name) "
