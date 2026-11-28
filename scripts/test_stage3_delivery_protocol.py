@@ -514,18 +514,22 @@ def test_delivery_requires_resource_claim(
     )
     release_resource_claims(execution)
 
-    # Another authorized repository in the same Project is not interchangeable
-    # with the physical Resource required and claimed by this Work.
-    other_id, other_repository_id, other_name = create_secondary_repository_resource(
-        project_id, resource_id
-    )
+    # A claim redirected to another authorized physical repository must not
+    # satisfy the original repository requirement, even when the Work remains
+    # fenced and the redirected Resource is granted to the same Project.
+    other_id, _, _ = create_secondary_repository_resource(project_id, resource_id)
     work, execution, fence = create_running_work(
-        project_id, "t-claim-guard-wrong-resource", resource_id
+        project_id, "t-claim-guard-wrong-resource-claim", resource_id
+    )
+    psql(
+        "UPDATE aep.resource_claims SET resource_id="
+        f"{lit(other_id)}::uuid WHERE execution_id={lit(execution)}::uuid "
+        f"AND resource_id={lit(resource_id)}::uuid AND status='active';"
     )
     expect_error(
-        allocate_sql(work, execution, fence, other_id, other_repository_id, other_name),
-        "matching Work ResourceRequirement",
-        "delivery allocation rejects a different authorized repository Resource",
+        allocate_sql(work, execution, fence, resource_id, repository_id, repository_full_name),
+        "reservation set is incomplete",
+        "delivery allocation rejects a ResourceClaim redirected to another repository",
     )
     release_resource_claims(execution)
 
