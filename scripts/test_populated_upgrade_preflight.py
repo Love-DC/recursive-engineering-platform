@@ -407,19 +407,17 @@ def assert_0015_recovery_projection(
             f"expected {expected_ids}, got {set(by_execution)}"
         )
 
-    for execution_id, work_id, fence, expected_status, expired, current in (
-        (execution_a, work_a, fence_a, "expired", False, False),
-        (execution_b, work_b, fence_b, "active", False, True),
-        (execution_c, work_c, fence_c, "active", True, True),
+    for execution_id, work_id, fence, expected_status, expired, current, expected_ref in (
+        (execution_a, work_a, fence_a, "expired", False, True, "refs/heads/main"),
+        (execution_b, work_b, fence_b, "active", False, True, "refs/heads/main"),
+        (execution_c, work_c, fence_c, "active", True, True, "refs/heads/upgrade-unrelated"),
     ):
         row = by_execution[execution_id]
         if (
             row["project_id"] != project_id
             or row["work_id"] != work_id
             or row["resource_id"] != resource_id
-            or row["resource_ref"] not in (
-                "refs/heads/main", "refs/heads/upgrade-unrelated"
-            )
+            or row["resource_ref"] != expected_ref
             or row["fence"] != fence
             or row["status"] != expected_status
             or row["lease_expired"] is not expired
