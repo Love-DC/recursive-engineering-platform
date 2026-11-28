@@ -153,17 +153,17 @@ def expect_missing_capability_status(
 
 
 def setup_database() -> list[Path]:
-    # This regression includes its additive hardening migration at 0013, so
-    # apply the complete ordered prototype chain through that migration.
-    paths = sorted(path for path in MIGRATIONS.glob("*.sql") if path.name[:4] <= "0013")
+    # Apply the complete ordered prototype migration chain so Stage 3
+    # continues to validate against the current schema, including later hardening.
+    paths = sorted(MIGRATIONS.glob("*.sql"))
     versions: list[int] = []
     for path in paths:
         match = re.fullmatch(r"(\d{4})_[a-z0-9_]+\.sql", path.name)
         if not match:
             raise SystemExit(f"Invalid migration filename: {path.name}")
         versions.append(int(match.group(1)))
-    if versions != list(range(1, 14)):
-        raise SystemExit(f"Expected contiguous migrations 0001..0013, got {versions}")
+    if versions != list(range(1, 16)):
+        raise SystemExit(f"Expected contiguous migrations 0001..0015, got {versions}")
 
     psql(f"DROP DATABASE IF EXISTS {DATABASE} WITH (FORCE);", db="postgres")
     psql(f"CREATE DATABASE {DATABASE};", db="postgres")
@@ -172,7 +172,7 @@ def setup_database() -> list[Path]:
         raise AssertionError(f"Stage 3 requires PostgreSQL 17.12; got {version}")
     for path in paths:
         psql(file=path)
-    print("PASS T26: clean additive migration chain 0001-0013 on PostgreSQL 17.12")
+    print("PASS T26: clean additive migration chain 0001-0015 on PostgreSQL 17.12")
     return paths
 
 
