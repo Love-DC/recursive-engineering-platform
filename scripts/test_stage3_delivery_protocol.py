@@ -172,7 +172,7 @@ def setup_database() -> list[Path]:
         raise AssertionError(f"Stage 3 requires PostgreSQL 17.12; got {version}")
     for path in paths:
         psql(file=path)
-    print("PASS T26: clean additive migration chain 0001-0008 on PostgreSQL 17.12")
+    print("PASS T26: clean additive migration chain 0001-0013 on PostgreSQL 17.12")
     return paths
 
 
