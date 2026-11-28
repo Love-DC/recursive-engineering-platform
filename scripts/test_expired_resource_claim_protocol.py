@@ -85,6 +85,7 @@ def prepare_work(project_id: str, resource_id: str, identity: str, resource_ref:
 
 def claim(work_id: str) -> tuple[str, int]:
     result = scalar(
+        "SET ROLE aep_runtime; "
         "SELECT execution_id::text || '|' || fence::text "
         "FROM aep.claim_work("
         f"{lit(work_id)}::uuid,{lit(str(uuid4()))}::uuid,600);"
@@ -101,9 +102,9 @@ def main() -> None:
         if not match:
             raise SystemExit(f"Invalid migration filename: {path.name}")
         versions.append(int(match.group(1)))
-    expected = list(range(1, 14))
+    expected = list(range(1, 15))
     if versions != expected:
-        raise SystemExit(f"Expected contiguous migrations 0001..0013, got {versions}")
+        raise SystemExit(f"Expected contiguous migrations 0001..0014, got {versions}")
 
     psql(f"DROP DATABASE IF EXISTS {DATABASE} WITH (FORCE);", db="postgres")
     psql(f"CREATE DATABASE {DATABASE};", db="postgres")
@@ -112,7 +113,19 @@ def main() -> None:
         raise AssertionError(f"PostgreSQL 17.12 is required; got {version}")
     for path in migration_paths:
         psql(file=path)
-    print("PASS clean migration chain: 0001..0013 on PostgreSQL 17.12")
+    print("PASS clean migration chain: 0001..0014 on PostgreSQL 17.12")
+
+    runtime_surface = scalar(
+        "SELECT has_function_privilege('aep_runtime',"
+        "'aep.claim_work(uuid,uuid,integer)','EXECUTE')::text "
+        "|| '|' || has_table_privilege('aep_runtime',"
+        "'aep.resource_claims','SELECT')::text;"
+    )
+    if runtime_surface != "true|false":
+        raise AssertionError(
+            f"replacement did not preserve the narrow runtime surface: {runtime_surface}"
+        )
+    print("PASS runtime surface: claim_work remains executable; ResourceClaims remain unreadable")
 
     project_id = scalar(
         "INSERT INTO aep.projects(project_key,name) "
